@@ -8,7 +8,8 @@ abstract class FlutterFaceAuthSdkPlatform extends PlatformInterface {
 
   static final Object _token = Object();
 
-  static FlutterFaceAuthSdkPlatform _instance = MethodChannelFlutterFaceAuthSdk();
+  static FlutterFaceAuthSdkPlatform _instance =
+      MethodChannelFlutterFaceAuthSdk();
 
   /// The default instance of [FlutterFaceAuthSdkPlatform] to use.
   ///

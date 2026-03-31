@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 
@@ -60,35 +62,57 @@ class FaceExtractionEngine {
 
     // 3. Spawning Isolate to crop the image buffer so we don't block the UI thread doing math
     return await Isolate.run(() {
-      print("[Extraction Engine] Background Isolate: Cropping the detected face");
+      debugPrint(
+        "[Extraction Engine] Background Isolate: Cropping the detected face",
+      );
 
       img.Image? decodedImage;
       if (format == InputImageFormat.bgra8888) {
         decodedImage = img.Image.fromBytes(
-            width: width, 
-            height: height, 
-            bytes: rawImageData.buffer, 
-            order: img.ChannelOrder.bgra);
+          width: width,
+          height: height,
+          bytes: rawImageData.buffer,
+          order: img.ChannelOrder.bgra,
+        );
       } else {
-        // Fallback for NV21 and other formats. Production SDKs often write custom 
+        // Fallback for NV21 and other formats. Production SDKs often write custom
         // fast C++ / Dart FFI routines for YUV to RGB conversion.
         decodedImage = img.Image.fromBytes(
-            width: width, 
-            height: height, 
-            bytes: rawImageData.buffer);
+          width: width,
+          height: height,
+          bytes: rawImageData.buffer,
+        );
       }
 
       if (decodedImage == null) return null;
 
       // Apply padding to the bounding box safely clamped to image bounds
-      final int cropX = (boundingBox.left - (boundingBox.width * (paddingScale - 1) / 2)).toInt().clamp(0, width);
-      final int cropY = (boundingBox.top - (boundingBox.height * (paddingScale - 1) / 2)).toInt().clamp(0, height);
-      final int cropWidth = (boundingBox.width * paddingScale).toInt().clamp(0, width - cropX);
-      final int cropHeight = (boundingBox.height * paddingScale).toInt().clamp(0, height - cropY);
+      final int cropX =
+          (boundingBox.left - (boundingBox.width * (paddingScale - 1) / 2))
+              .toInt()
+              .clamp(0, width);
+      final int cropY =
+          (boundingBox.top - (boundingBox.height * (paddingScale - 1) / 2))
+              .toInt()
+              .clamp(0, height);
+      final int cropWidth = (boundingBox.width * paddingScale).toInt().clamp(
+        0,
+        width - cropX,
+      );
+      final int cropHeight = (boundingBox.height * paddingScale).toInt().clamp(
+        0,
+        height - cropY,
+      );
 
       // Execute Crop
-      final croppedImage = img.copyCrop(decodedImage, x: cropX, y: cropY, width: cropWidth, height: cropHeight);
-      
+      final croppedImage = img.copyCrop(
+        decodedImage,
+        x: cropX,
+        y: cropY,
+        width: cropWidth,
+        height: cropHeight,
+      );
+
       // Encode back to jpg byte array
       return Uint8List.fromList(img.encodeJpg(croppedImage, quality: 90));
     });
@@ -100,26 +124,46 @@ class FaceExtractionEngine {
     double paddingScale = 1.2,
   }) async {
     final inputImage = InputImage.fromFilePath(filePath);
-    
+
     final faces = await _faceDetector.processImage(inputImage);
     if (faces.isEmpty) return null;
 
     final boundingBox = faces.first.boundingBox;
 
     return await Isolate.run(() {
-      print("[Extraction Engine] Background Isolate: Cropping detected face from file");
-      final decodedImage = img.decodeImage(img.io.File(filePath).readAsBytesSync());
+      debugPrint(
+        "[Extraction Engine] Background Isolate: Cropping detected face from file",
+      );
+      final decodedImage = img.decodeImage(File(filePath).readAsBytesSync());
       if (decodedImage == null) return null;
 
       final int width = decodedImage.width;
       final int height = decodedImage.height;
 
-      final int cropX = (boundingBox.left - (boundingBox.width * (paddingScale - 1) / 2)).toInt().clamp(0, width);
-      final int cropY = (boundingBox.top - (boundingBox.height * (paddingScale - 1) / 2)).toInt().clamp(0, height);
-      final int cropWidth = (boundingBox.width * paddingScale).toInt().clamp(0, width - cropX);
-      final int cropHeight = (boundingBox.height * paddingScale).toInt().clamp(0, height - cropY);
+      final int cropX =
+          (boundingBox.left - (boundingBox.width * (paddingScale - 1) / 2))
+              .toInt()
+              .clamp(0, width);
+      final int cropY =
+          (boundingBox.top - (boundingBox.height * (paddingScale - 1) / 2))
+              .toInt()
+              .clamp(0, height);
+      final int cropWidth = (boundingBox.width * paddingScale).toInt().clamp(
+        0,
+        width - cropX,
+      );
+      final int cropHeight = (boundingBox.height * paddingScale).toInt().clamp(
+        0,
+        height - cropY,
+      );
 
-      final croppedImage = img.copyCrop(decodedImage, x: cropX, y: cropY, width: cropWidth, height: cropHeight);
+      final croppedImage = img.copyCrop(
+        decodedImage,
+        x: cropX,
+        y: cropY,
+        width: cropWidth,
+        height: cropHeight,
+      );
       return Uint8List.fromList(img.encodeJpg(croppedImage, quality: 90));
     });
   }

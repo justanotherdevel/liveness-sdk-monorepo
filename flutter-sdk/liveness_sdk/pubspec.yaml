@@ -13,7 +13,7 @@ dependencies:
   plugin_platform_interface: ^2.0.2
   google_mlkit_face_detection: ^0.13.0
   image: ^4.1.7
-  onnxruntime: ^2.8.0
+  onnxruntime: ^1.4.1
   flutter_secure_storage: ^9.0.0
   http: ^1.2.0
   path_provider: ^2.1.2

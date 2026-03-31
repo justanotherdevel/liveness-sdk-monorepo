@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
+import 'package:flutter/foundation.dart';
 import '../live_face_auth.dart';
 import '../engines/active_liveness_engine.dart';
 import 'face_overlay_painter.dart';
@@ -13,9 +15,9 @@ class EnrollFaceScreen extends StatefulWidget {
   final bool requireActiveLiveness;
 
   const EnrollFaceScreen({
-    Key? key, 
-    required this.sdk, 
-    this.requireActiveLiveness = true
+    Key? key,
+    required this.sdk,
+    this.requireActiveLiveness = true,
   }) : super(key: key);
 
   @override
@@ -28,40 +30,45 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
     options: FaceDetectorOptions(
       enableClassification: true,
       enableTracking: true,
-    )
+    ),
   );
   final ActiveLivenessEngine _activeEngine = ActiveLivenessEngine();
-  
+
   bool _isProcessing = false;
   String _instructionText = "Center your face in the oval";
   Color _borderColor = Colors.grey;
-  
+
   int _challengeIndex = 0;
   final List<ActiveChallenge> _challenges = [
-    ActiveChallenge.blink, 
-    ActiveChallenge.headNod
+    ActiveChallenge.blink,
+    ActiveChallenge.headNod,
   ];
-  
+
   @override
   void initState() {
     super.initState();
     _initCamera();
   }
-  
+
   Future<void> _initCamera() async {
     final cameras = await availableCameras();
-    final front = cameras.firstWhere((c) => c.lensDirection == CameraLensDirection.front, orElse:() => cameras.first);
-    
+    final front = cameras.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.front,
+      orElse: () => cameras.first,
+    );
+
     _CameraController = CameraController(
-      front, 
+      front,
       ResolutionPreset.high,
       enableAudio: false,
-      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
     );
-    
+
     await _CameraController!.initialize();
     if (!mounted) return;
-    
+
     _CameraController!.startImageStream(_handleCameraImage);
     setState(() {});
   }
@@ -77,10 +84,17 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
       }
       final bytes = allBytes.done().buffer.asUint8List();
 
-      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      final Size imageSize = Size(
+        image.width.toDouble(),
+        image.height.toDouble(),
+      );
       final camera = _CameraController!.description;
-      final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation270deg;
-      final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21;
+      final imageRotation =
+          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+          InputImageRotation.rotation270deg;
+      final inputImageFormat =
+          InputImageFormatValue.fromRawValue(image.format.raw) ??
+          InputImageFormat.nv21;
 
       final inputData = InputImageMetadata(
         size: imageSize,
@@ -89,7 +103,10 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
         bytesPerRow: image.planes[0].bytesPerRow,
       );
 
-      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: inputData);
+      final inputImage = InputImage.fromBytes(
+        bytes: bytes,
+        metadata: inputData,
+      );
       final faces = await _faceDetector.processImage(inputImage);
 
       if (faces.isEmpty) {
@@ -99,7 +116,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
         });
       } else {
         final face = faces.first;
-        
+
         if (!widget.requireActiveLiveness) {
           setState(() {
             _instructionText = "Hold still...";
@@ -111,8 +128,8 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
 
         // Active Liveness Routing
         final currentChallenge = _challenges[_challengeIndex];
-        
-        switch(currentChallenge) {
+
+        switch (currentChallenge) {
           case ActiveChallenge.blink:
             if (_instructionText != "Please blink your eyes") {
               setState(() => _instructionText = "Please blink your eyes");
@@ -125,15 +142,21 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
             break;
           case ActiveChallenge.headShake:
             if (_instructionText != "Please shake your head left and right") {
-               setState(() => _instructionText = "Please shake your head left and right");
+              setState(
+                () =>
+                    _instructionText = "Please shake your head left and right",
+              );
             }
             break;
         }
 
         setState(() => _borderColor = Colors.orangeAccent);
 
-        final passed = _activeEngine.verifyChallenge(face: face, challenge: currentChallenge);
-        
+        final passed = _activeEngine.verifyChallenge(
+          face: face,
+          challenge: currentChallenge,
+        );
+
         if (passed) {
           if (_challengeIndex < _challenges.length - 1) {
             _challengeIndex++;
@@ -149,7 +172,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
         }
       }
     } catch (e) {
-      print("Error processing frame: \$e");
+      debugPrint("Error processing frame: \$e");
     } finally {
       if (mounted) _isProcessing = false;
     }
@@ -159,21 +182,20 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
     try {
       final xFile = await _CameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
-      import 'dart:convert';
       final base64String = base64Encode(bytes);
-      
+
       final result = await widget.sdk.enrollFaceImage(
-        imageBase64: base64String, 
-        saveReference: true
+        imageBase64: base64String,
+        saveReference: true,
       );
-      
+
       if (mounted) {
         Navigator.pop(context, result);
       }
     } catch (e) {
       setState(() {
-         _instructionText = "Failed to capture. Please try again.";
-         _borderColor = Colors.red;
+        _instructionText = "Failed to capture. Please try again.";
+        _borderColor = Colors.red;
       });
     }
   }
@@ -192,15 +214,16 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_CameraController != null && _CameraController!.value.isInitialized)
+          if (_CameraController != null &&
+              _CameraController!.value.isInitialized)
             CameraPreview(_CameraController!),
-            
+
           // Aadhaar clean white overlay
           CustomPaint(
             painter: FaceOverlayPainter(borderColor: _borderColor),
             child: Container(),
           ),
-          
+
           // Header
           Positioned(
             top: 60,
@@ -218,7 +241,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
               ),
             ),
           ),
-          
+
           // Instruction Card
           Positioned(
             bottom: 100,
@@ -231,11 +254,11 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
+                    color: Colors.black.withValues(alpha: 0.08),
                     blurRadius: 20,
                     offset: const Offset(0, 4),
-                  )
-                ]
+                  ),
+                ],
               ),
               child: Text(
                 _instructionText,
@@ -248,7 +271,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
               ),
             ),
           ),
-          
+
           // Close button
           Positioned(
             bottom: 30,
@@ -263,11 +286,15 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
                     color: Colors.grey.shade100,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.close, color: Colors.black54, size: 28),
+                  child: const Icon(
+                    Icons.close,
+                    color: Colors.black54,
+                    size: 28,
+                  ),
                 ),
               ),
             ),
-          )
+          ),
         ],
       ),
     );

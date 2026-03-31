@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
+import 'package:flutter/foundation.dart';
 import '../live_face_auth.dart';
 import 'face_overlay_painter.dart';
 
@@ -11,10 +13,7 @@ class AuthenticateFaceScreen extends StatefulWidget {
   final LiveFaceAuth sdk;
 
   // Uses locally saved reference implicitly
-  const AuthenticateFaceScreen({
-    Key? key, 
-    required this.sdk,
-  }) : super(key: key);
+  const AuthenticateFaceScreen({Key? key, required this.sdk}) : super(key: key);
 
   @override
   State<AuthenticateFaceScreen> createState() => _AuthenticateFaceScreenState();
@@ -23,32 +22,37 @@ class AuthenticateFaceScreen extends StatefulWidget {
 class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
   CameraController? _CameraController;
   final FaceDetector _faceDetector = FaceDetector();
-  
+
   bool _isProcessing = false;
   bool _isAuthenticating = false;
   String _instructionText = "Align your face within the frame";
   Color _borderColor = Colors.redAccent;
-  
+
   @override
   void initState() {
     super.initState();
     _initCamera();
   }
-  
+
   Future<void> _initCamera() async {
     final cameras = await availableCameras();
-    final front = cameras.firstWhere((c) => c.lensDirection == CameraLensDirection.front, orElse:() => cameras.first);
-    
+    final front = cameras.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.front,
+      orElse: () => cameras.first,
+    );
+
     _CameraController = CameraController(
-      front, 
+      front,
       ResolutionPreset.high,
       enableAudio: false,
-      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
     );
-    
+
     await _CameraController!.initialize();
     if (!mounted) return;
-    
+
     _CameraController!.startImageStream(_handleCameraImage);
     setState(() {});
   }
@@ -64,10 +68,17 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
       }
       final bytes = allBytes.done().buffer.asUint8List();
 
-      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      final Size imageSize = Size(
+        image.width.toDouble(),
+        image.height.toDouble(),
+      );
       final camera = _CameraController!.description;
-      final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation270deg;
-      final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21;
+      final imageRotation =
+          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+          InputImageRotation.rotation270deg;
+      final inputImageFormat =
+          InputImageFormatValue.fromRawValue(image.format.raw) ??
+          InputImageFormat.nv21;
 
       final inputData = InputImageMetadata(
         size: imageSize,
@@ -76,7 +87,10 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
         bytesPerRow: image.planes[0].bytesPerRow,
       );
 
-      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: inputData);
+      final inputImage = InputImage.fromBytes(
+        bytes: bytes,
+        metadata: inputData,
+      );
       final faces = await _faceDetector.processImage(inputImage);
 
       if (faces.isEmpty) {
@@ -88,14 +102,14 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
         // Face found, checking alignment bounds
         final face = faces.first;
         final bounds = face.boundingBox;
-        
+
         // Simple heuristic: face should be reasonably large in frame
         if (bounds.width < imageSize.width * 0.3) {
-           setState(() {
-             _instructionText = "Move closer";
-             _borderColor = Colors.orangeAccent;
-           });
-           return;
+          setState(() {
+            _instructionText = "Move closer";
+            _borderColor = Colors.orangeAccent;
+          });
+          return;
         }
 
         setState(() {
@@ -108,7 +122,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
         await _authenticateCapturedFace();
       }
     } catch (e) {
-      print("Error processing frame: \$e");
+      debugPrint("Error processing frame: \$e");
     } finally {
       if (mounted) _isProcessing = false;
     }
@@ -118,36 +132,35 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
     try {
       final xFile = await _CameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
-      import 'dart:convert';
       final base64String = base64Encode(bytes);
-      
+
       final result = await widget.sdk.checkFaceAuth(
         targetImageBase64: base64String,
         useReference: true,
         passiveLiveness: true,
       );
-      
+
       if (mounted) {
         if (result.success) {
-           setState(() {
-             _instructionText = "Authentication Successful!";
-             _borderColor = Colors.green;
-           });
-           await Future.delayed(const Duration(milliseconds: 700));
+          setState(() {
+            _instructionText = "Authentication Successful!";
+            _borderColor = Colors.green;
+          });
+          await Future.delayed(const Duration(milliseconds: 700));
         } else {
-           setState(() {
-             _instructionText = "Authentication Failed.";
-             _borderColor = Colors.red;
-           });
-           await Future.delayed(const Duration(milliseconds: 1000));
+          setState(() {
+            _instructionText = "Authentication Failed.";
+            _borderColor = Colors.red;
+          });
+          await Future.delayed(const Duration(milliseconds: 1000));
         }
         Navigator.pop(context, result);
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-           _instructionText = "System Error. Please try again.";
-           _borderColor = Colors.red;
+          _instructionText = "System Error. Please try again.";
+          _borderColor = Colors.red;
         });
         await Future.delayed(const Duration(seconds: 2));
         Navigator.pop(context, FaceAuthResult(success: false, strong: false));
@@ -169,14 +182,15 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_CameraController != null && _CameraController!.value.isInitialized)
+          if (_CameraController != null &&
+              _CameraController!.value.isInitialized)
             CameraPreview(_CameraController!),
-            
+
           CustomPaint(
             painter: FaceOverlayPainter(borderColor: _borderColor),
             child: Container(),
           ),
-          
+
           Positioned(
             top: 60,
             left: 0,
@@ -193,7 +207,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
               ),
             ),
           ),
-          
+
           Positioned(
             bottom: 100,
             left: 24,
@@ -205,21 +219,25 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
+                    color: Colors.black.withValues(alpha: 0.08),
                     blurRadius: 20,
                     offset: const Offset(0, 4),
-                  )
-                ]
+                  ),
+                ],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (_isAuthenticating) 
+                  if (_isAuthenticating)
                     const Padding(
                       padding: EdgeInsets.only(right: 12.0),
                       child: SizedBox(
-                        width: 20, height: 20, 
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blueAccent)
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.blueAccent,
+                        ),
                       ),
                     ),
                   Expanded(
@@ -237,7 +255,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
               ),
             ),
           ),
-          
+
           Positioned(
             bottom: 30,
             left: 0,
@@ -251,11 +269,15 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
                     color: Colors.grey.shade100,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.close, color: Colors.black54, size: 28),
+                  child: const Icon(
+                    Icons.close,
+                    color: Colors.black54,
+                    size: 28,
+                  ),
                 ),
               ),
             ),
-          )
+          ),
         ],
       ),
     );
