@@ -4,6 +4,22 @@ import models, schemas
 from database import engine, get_db
 import datetime
 import json
+import cv2
+import numpy as np
+from insightface.app import FaceAnalysis
+
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Liveness & Face Auth Backend")
+
+# Initialize InsightFace Buffalo Large Model
+# Expects models in ./models/models/buffalo_l/ 
+# OR just ./models/buffalo_l/ based on Insightface version
+face_app = FaceAnalysis(name='buffalo_l', root='./models', providers=['CPUExecutionProvider'])
+face_app.prepare(ctx_id=0, det_size=(640, 640))
+
+def compute_similarity(feat1, feat2):
+    return np.dot(feat1, feat2) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -31,7 +47,7 @@ def validate_key(request: schemas.ValidateKeyRequest, db: Session = Depends(get_
     return {"is_valid": True, "expires_at": db_key.expires_at}
 
 @app.post("/compare_faces")
-def compare_faces(
+async def compare_faces(
     api_key: str = Form(...),
     cropped: bool = Form(True),
     reference_image: UploadFile = File(...),
@@ -41,14 +57,42 @@ def compare_faces(
     # Verify the API key first
     verify_api_key(api_key, db)
     
-    # MOCK FACE COMPARISON LOGIC
-    # In production, this would use an actual ML model instance
+    # Read buffers
+    ref_bytes = await reference_image.read()
+    tgt_bytes = await target_image.read()
+    
+    # Decode to BGR numpy arrays using OpenCV
+    ref_img = cv2.imdecode(np.frombuffer(ref_bytes, np.uint8), cv2.IMREAD_COLOR)
+    tgt_img = cv2.imdecode(np.frombuffer(tgt_bytes, np.uint8), cv2.IMREAD_COLOR)
+
+    # Insightface inference
+    ref_faces = face_app.get(ref_img)
+    tgt_faces = face_app.get(tgt_img)
+
+    if not ref_faces or not tgt_faces:
+        return {
+            "success": False,
+            "message": "Face not detected in one or both images.",
+            "similarity_score": 0.0,
+            "threshold_met": False
+        }
+        
+    # Get 512D embeddings
+    ref_feat = ref_faces[0].embedding
+    tgt_feat = tgt_faces[0].embedding
+    
+    # Cosine Similarity Calculation
+    similarity = compute_similarity(ref_feat, tgt_feat)
+    
+    # Buffalo L similarity threshold is roughly 0.45 - 0.50 
+    threshold = 0.45 
+    is_match = bool(similarity >= threshold)
     
     return {
-        "success": True,
-        "similarity_score": 95.5, # Mock similarity score
-        "threshold_met": True,
-        "message": "Fallback deep verification successful (MOCK)",
+        "success": is_match,
+        "similarity_score": float(similarity),
+        "threshold_met": is_match,
+        "message": "Verification successful" if is_match else "Faces do not match",
         "cropped_processed": cropped
     }
 

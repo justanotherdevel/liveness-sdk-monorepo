@@ -93,4 +93,34 @@ class FaceExtractionEngine {
       return Uint8List.fromList(img.encodeJpg(croppedImage, quality: 90));
     });
   }
+
+  /// Extracts a face from a static file path (e.g., from a decoded Base64 JPEG).
+  Future<Uint8List?> extractFaceFromFile({
+    required String filePath,
+    double paddingScale = 1.2,
+  }) async {
+    final inputImage = InputImage.fromFilePath(filePath);
+    
+    final faces = await _faceDetector.processImage(inputImage);
+    if (faces.isEmpty) return null;
+
+    final boundingBox = faces.first.boundingBox;
+
+    return await Isolate.run(() {
+      print("[Extraction Engine] Background Isolate: Cropping detected face from file");
+      final decodedImage = img.decodeImage(img.io.File(filePath).readAsBytesSync());
+      if (decodedImage == null) return null;
+
+      final int width = decodedImage.width;
+      final int height = decodedImage.height;
+
+      final int cropX = (boundingBox.left - (boundingBox.width * (paddingScale - 1) / 2)).toInt().clamp(0, width);
+      final int cropY = (boundingBox.top - (boundingBox.height * (paddingScale - 1) / 2)).toInt().clamp(0, height);
+      final int cropWidth = (boundingBox.width * paddingScale).toInt().clamp(0, width - cropX);
+      final int cropHeight = (boundingBox.height * paddingScale).toInt().clamp(0, height - cropY);
+
+      final croppedImage = img.copyCrop(decodedImage, x: cropX, y: cropY, width: cropWidth, height: cropHeight);
+      return Uint8List.fromList(img.encodeJpg(croppedImage, quality: 90));
+    });
+  }
 }

@@ -20,15 +20,19 @@ final _liveFaceAuth = await LiveFaceAuth({
 - **Output**: Returns `true` if the score exceeds the safe threshold, `false` otherwise.
 
 ### `checkFaceAuth`
-- **Input**: `referenceImage` (Base64), `useReference` (default `false`), `image` (Base64), `passiveLiveness` (default `true`), `threshold` (default `80`).
+- **Input**: `referenceImage` (Base64), `useReference` (default `false`), `image` (Base64), `passiveLiveness` (default `true`), `threshold` (default `80`), `proceedIfLivenessFail` (default `false`).
 - **Process**: 
   1. Crops faces from both images using ML Kit. Uses stored reference from secure storage if `useReference` is `true`.
-  2. Runs `minifasnet.onnx` on the target image to ensure liveness (if enabled). Returns `false` immediately if liveness fails.
+  2. Runs `minifasnet.onnx` on the target image to ensure liveness (if enabled). If it fails liveness and `proceedIfLivenessFail` is `false`, it returns immediately. If `proceedIfLivenessFail` is `true`, it continues to face matching regardless.
   3. Runs `arcface.onnx` to compare the reference and target face.
-  4. If the similarity score is above the `threshold`, returns `true`.
+  4. If the similarity score is above the `threshold`, records success.
   5. If the score is below the threshold, dispatches the images to the backend server (`/compare_faces`) for a more accurate comparison.
-  6. If offline during step 5, it returns `false` with `strong: false` (indicating a low-confidence decision).
-- **Output**: Boolean authentication result.
+  6. If offline during step 5, it returns `success: false` with `strong: false` (indicating a low-confidence decision).
+- **Output**: `FaceAuthResult` object containing:
+  - `success` (bool): Overall authentication result.
+  - `strong` (bool): Was internet processing available if fallback was required?
+  - `passiveLivenessResult` (bool?): The result of passive liveness (null if bypassed).
+  - `activeLivenessResult` (bool?): The result of active liveness (null if bypassed).
 
 ### `enrollFaceLiveScreen`
 - **Input**: `active` (default `false`), `activeLivenessChecks` (e.g., blink, head nod, head shake), `saveReference` (default `false`).
@@ -47,6 +51,9 @@ final _liveFaceAuth = await LiveFaceAuth({
 
 ### `clearReference`
 - **Process**: Deletes the saved reference image and vector from local secure storage.
+
+### `isFaceEnrolled`
+- **Output**: Returns a `bool` representing whether a reference face is currently enrolled/saved in local secure storage.
 
 ### `AuthenticateFaceScreen`
 - **Input**: `passive` (default `true`), `active` (default `false`), `activeLivenessChecks`, `faceAuthThreshold` (default `80`).
