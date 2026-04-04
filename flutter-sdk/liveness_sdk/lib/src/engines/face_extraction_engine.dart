@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -83,9 +82,6 @@ class FaceExtractionEngine {
           bytes: rawImageData.buffer,
         );
       }
-
-      if (decodedImage == null) return null;
-
       // Apply padding to the bounding box safely clamped to image bounds
       final int cropX =
           (boundingBox.left - (boundingBox.width * (paddingScale - 1) / 2))

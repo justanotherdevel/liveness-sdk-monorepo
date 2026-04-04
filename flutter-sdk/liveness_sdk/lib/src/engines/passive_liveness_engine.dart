@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:isolate';
-import 'dart:typed_data';
+import 'dart:math' show exp;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
-import 'package:flutter/foundation.dart';
 import 'package:onnxruntime/onnxruntime.dart';
 
 class PassiveLivenessEngine {
@@ -17,7 +16,7 @@ class PassiveLivenessEngine {
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
       final rawAssetFile = await rootBundle.load(
-        'assets/models/minifasnet.onnx',
+        'packages/flutter_face_auth_sdk/assets/models/minifasnet.onnx',
       );
       _mlSession = OrtSession.fromBuffer(
         rawAssetFile.buffer.asUint8List(),
@@ -25,8 +24,9 @@ class PassiveLivenessEngine {
       );
       _isInitialized = true;
       debugPrint("[Passive Liveness Engine] ONNX Model initialized.");
-    } catch (e) {
-      debugPrint("[Passive Liveness Engine] Failed to initialize model: \$e");
+    } catch (e, stackTrace) {
+      debugPrint("[Passive Liveness Engine] Failed to initialize model: $e");
+      debugPrint("[Passive Liveness Engine] Stack trace: $stackTrace");
     }
   }
 
@@ -46,15 +46,16 @@ class PassiveLivenessEngine {
 
     // 1. Threaded Image Preprocessing
     // This is the CPU heavy part, offloaded to a background isolate.
-    final inputSize = 80;
+    final inputSize = 128;
     final tensorBuffer = await Isolate.run(() {
       debugPrint(
-        "[Passive Liveness Engine] Background Isolate: Decoding and resizing image to \${inputSize}x\${inputSize}...",
+        "[Passive Liveness Engine] Background Isolate: Decoding and resizing image to ${inputSize}x$inputSize...",
       );
 
       final decodedImage = img.decodeImage(croppedFaceBytes);
-      if (decodedImage == null)
+      if (decodedImage == null) {
         throw Exception("Failed to decode cropped face image bytes.");
+      }
 
       final resizedImage = img.copyResize(
         decodedImage,
@@ -90,18 +91,28 @@ class PassiveLivenessEngine {
     double livenessScore = 0.0;
 
     try {
-      // Modify 'input_1' to exactly match the input node name of minifasnet.onnx
-      final inputs = {'input_1': inputTensor};
+      final inputs = {'input': inputTensor};
       final outputs = _mlSession!.run(runOptions, inputs);
 
-      // Parse output logits
+      // Parse output logits: model outputs [N, 2] where idx 0=spoof, idx 1=live
       if (outputs.isNotEmpty) {
         final outputTensor = outputs[0];
         if (outputTensor?.value is List) {
           final logits = outputTensor?.value as List;
           if (logits.isNotEmpty && logits.first is List) {
-            // Example extraction logic (depends entirely on the model architecture)
-            livenessScore = logits.first[0].toDouble();
+            final row = logits.first as List;
+            final double liveLogit = (row[0] as num).toDouble();
+            final double spoofLogit = (row[1] as num).toDouble();
+
+            // Softmax to convert logits to probabilities
+            final double maxLogit = spoofLogit > liveLogit ? spoofLogit : liveLogit;
+            final double expSpoof = exp(spoofLogit - maxLogit);
+            final double expLive = exp(liveLogit - maxLogit);
+            livenessScore = expLive / (expSpoof + expLive);
+
+            debugPrint(
+              "[Passive Liveness Engine] Logits: live=$liveLogit, spoof=$spoofLogit => liveness=$livenessScore",
+            );
           }
         }
       }
@@ -111,7 +122,7 @@ class PassiveLivenessEngine {
         out?.release();
       }
     } catch (e) {
-      debugPrint("[Passive Liveness Engine] ONNX Inference Error: \$e");
+      debugPrint("[Passive Liveness Engine] ONNX Inference Error: $e");
     } finally {
       // CRITICAL: Must release input tensors and options to prevent unmanaged C++ memory leak
       inputTensor.release();

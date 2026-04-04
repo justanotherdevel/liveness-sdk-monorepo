@@ -4,6 +4,7 @@ import models, schemas
 from database import engine, get_db
 import datetime
 import json
+import os
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
@@ -15,8 +16,14 @@ app = FastAPI(title="Liveness & Face Auth Backend")
 # Initialize InsightFace Buffalo Large Model
 # Expects models in ./models/models/buffalo_l/ 
 # OR just ./models/buffalo_l/ based on Insightface version
+# Full image pipeline: large det_size for detection across the whole frame
 face_app = FaceAnalysis(name='buffalo_l', root='./models', providers=['CPUExecutionProvider'])
 face_app.prepare(ctx_id=0, det_size=(640, 640))
+
+# Pre-cropped face pipeline: small det_size matched to a face-filling crop
+# Using (128,128) so the face that fills ~112x112 is within detection range
+face_app_cropped = FaceAnalysis(name='buffalo_l', root='./models', providers=['CPUExecutionProvider'])
+face_app_cropped.prepare(ctx_id=0, det_size=(128, 128))
 
 def compute_similarity(feat1, feat2):
     return np.dot(feat1, feat2) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))
@@ -46,6 +53,40 @@ def validate_key(request: schemas.ValidateKeyRequest, db: Session = Depends(get_
         
     return {"is_valid": True, "expires_at": db_key.expires_at}
 
+def get_embedding_from_image(img_bgr: np.ndarray, is_cropped: bool, label: str = "img") -> np.ndarray | None:
+    """Extract face embedding. If already cropped, resize to 112x112 and run recognition directly.
+    If full image, run detection first."""
+    # --- DEBUG: Save received image ---
+    debug_dir = "/tmp/debug"
+    os.makedirs(debug_dir, exist_ok=True)
+    import time
+    ts = int(time.time() * 1000)
+    orig_path = f"{debug_dir}/{label}_original_{ts}.jpg"
+    cv2.imwrite(orig_path, img_bgr)
+    print(f"[DEBUG] Saved {label} original ({img_bgr.shape}) => {orig_path}")
+    # ----------------------------------
+
+    if is_cropped:
+        # Image is already a face crop — skip the large detector.
+        # Resize to standard ArcFace input and run with small det_size model.
+        resized = cv2.resize(img_bgr, (112, 112))
+        resized_path = f"{debug_dir}/{label}_resized_112_{ts}.jpg"
+        cv2.imwrite(resized_path, resized)
+        print(f"[DEBUG] Saved {label} resized 112x112 => {resized_path}")
+        faces = face_app_cropped.get(resized)
+        if not faces:
+            print(f"[DEBUG] InsightFace (det_size=128) found NO faces in resized {label} image")
+            return None
+        print(f"[DEBUG] InsightFace (det_size=128) found {len(faces)} face(s) in resized {label} image")
+        return faces[0].embedding
+    else:
+        faces = face_app.get(img_bgr)
+        if not faces:
+            print(f"[DEBUG] InsightFace (det_size=640) found NO faces in full {label} image")
+            return None
+        print(f"[DEBUG] InsightFace (det_size=640) found {len(faces)} face(s) in full {label} image")
+        return faces[0].embedding
+
 @app.post("/compare_faces")
 async def compare_faces(
     api_key: str = Form(...),
@@ -65,11 +106,13 @@ async def compare_faces(
     ref_img = cv2.imdecode(np.frombuffer(ref_bytes, np.uint8), cv2.IMREAD_COLOR)
     tgt_img = cv2.imdecode(np.frombuffer(tgt_bytes, np.uint8), cv2.IMREAD_COLOR)
 
-    # Insightface inference
-    ref_faces = face_app.get(ref_img)
-    tgt_faces = face_app.get(tgt_img)
+    if ref_img is None or tgt_img is None:
+        raise HTTPException(status_code=400, detail="Could not decode one or both images.")
 
-    if not ref_faces or not tgt_faces:
+    ref_feat = get_embedding_from_image(ref_img, cropped, label="ref")
+    tgt_feat = get_embedding_from_image(tgt_img, cropped, label="tgt")
+
+    if ref_feat is None or tgt_feat is None:
         return {
             "success": False,
             "message": "Face not detected in one or both images.",
@@ -77,15 +120,11 @@ async def compare_faces(
             "threshold_met": False
         }
         
-    # Get 512D embeddings
-    ref_feat = ref_faces[0].embedding
-    tgt_feat = tgt_faces[0].embedding
-    
     # Cosine Similarity Calculation
     similarity = compute_similarity(ref_feat, tgt_feat)
     
     # Buffalo L similarity threshold is roughly 0.45 - 0.50 
-    threshold = 0.45 
+    threshold = 0.45
     is_match = bool(similarity >= threshold)
     
     return {

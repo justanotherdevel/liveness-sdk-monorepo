@@ -13,15 +13,15 @@ class AuthenticateFaceScreen extends StatefulWidget {
   final LiveFaceAuth sdk;
 
   // Uses locally saved reference implicitly
-  const AuthenticateFaceScreen({Key? key, required this.sdk}) : super(key: key);
+  const AuthenticateFaceScreen({super.key, required this.sdk});
 
   @override
   State<AuthenticateFaceScreen> createState() => _AuthenticateFaceScreenState();
 }
 
 class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
-  CameraController? _CameraController;
-  final FaceDetector _faceDetector = FaceDetector();
+  CameraController? _cameraController;
+  final FaceDetector _faceDetector = FaceDetector(options: FaceDetectorOptions());
 
   bool _isProcessing = false;
   bool _isAuthenticating = false;
@@ -41,19 +41,19 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
       orElse: () => cameras.first,
     );
 
-    _CameraController = CameraController(
+    _cameraController = CameraController(
       front,
-      ResolutionPreset.high,
+      ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: Platform.isAndroid
           ? ImageFormatGroup.nv21
           : ImageFormatGroup.bgra8888,
     );
 
-    await _CameraController!.initialize();
+    await _cameraController!.initialize();
     if (!mounted) return;
 
-    _CameraController!.startImageStream(_handleCameraImage);
+    _cameraController!.startImageStream(_handleCameraImage);
     setState(() {});
   }
 
@@ -72,7 +72,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
         image.width.toDouble(),
         image.height.toDouble(),
       );
-      final camera = _CameraController!.description;
+      final camera = _cameraController!.description;
       final imageRotation =
           InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
           InputImageRotation.rotation270deg;
@@ -118,11 +118,11 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
           _isAuthenticating = true;
         });
 
-        await _CameraController!.stopImageStream();
+        await _cameraController!.stopImageStream();
         await _authenticateCapturedFace();
       }
     } catch (e) {
-      debugPrint("Error processing frame: \$e");
+      debugPrint("Error processing frame: $e");
     } finally {
       if (mounted) _isProcessing = false;
     }
@@ -130,7 +130,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
 
   Future<void> _authenticateCapturedFace() async {
     try {
-      final xFile = await _CameraController!.takePicture();
+      final xFile = await _cameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
       final base64String = base64Encode(bytes);
 
@@ -154,6 +154,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
           });
           await Future.delayed(const Duration(milliseconds: 1000));
         }
+        if (!mounted) return;
         Navigator.pop(context, result);
       }
     } catch (e) {
@@ -163,6 +164,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
           _borderColor = Colors.red;
         });
         await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
         Navigator.pop(context, FaceAuthResult(success: false, strong: false));
       }
     }
@@ -170,7 +172,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
 
   @override
   void dispose() {
-    _CameraController?.dispose();
+    _cameraController?.dispose();
     _faceDetector.close();
     super.dispose();
   }
@@ -182,9 +184,9 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_CameraController != null &&
-              _CameraController!.value.isInitialized)
-            CameraPreview(_CameraController!),
+          if (_cameraController != null &&
+              _cameraController!.value.isInitialized)
+            CameraPreview(_cameraController!),
 
           CustomPaint(
             painter: FaceOverlayPainter(borderColor: _borderColor),

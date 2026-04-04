@@ -53,6 +53,7 @@ flutter:
 
   assets:
     - assets/models/minifasnet.onnx
+    - assets/models/mobilefacenet.onnx
   #   - images/a_dot_ham.jpeg
   #
   # For details regarding assets in packages, see

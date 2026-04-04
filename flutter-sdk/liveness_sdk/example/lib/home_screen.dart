@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_face_auth_sdk/liveness_sdk.dart';
@@ -8,7 +6,7 @@ import 'package:flutter_face_auth_sdk/liveness_sdk.dart';
 class HomeScreen extends StatefulWidget {
   final LiveFaceAuth sdk;
 
-  const HomeScreen({Key? key, required this.sdk}) : super(key: key);
+  const HomeScreen({super.key, required this.sdk});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -271,14 +269,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (result != null && result is FaceAuthResult) {
       String log =
-          "Auth Match Successful: \${result.success}\\nStrong Model Processed: \${result.strong}";
+          "Auth Match Successful: ${result.success}\nStrong Model Processed: ${result.strong}";
 
       if (result.passiveLivenessResult != null) {
-        log += "\\nPassive Liveness Passed: \${result.passiveLivenessResult}";
+        log += "\nPassive Liveness Passed: ${result.passiveLivenessResult}";
       }
 
       if (result.activeLivenessResult != null) {
-        log += "\\nActive Liveness Passed: \${result.activeLivenessResult}";
+        log += "\nActive Liveness Passed: ${result.activeLivenessResult}";
       }
 
       _showResultDialog(

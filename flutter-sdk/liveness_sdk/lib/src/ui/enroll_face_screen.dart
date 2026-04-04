@@ -15,17 +15,17 @@ class EnrollFaceScreen extends StatefulWidget {
   final bool requireActiveLiveness;
 
   const EnrollFaceScreen({
-    Key? key,
+    super.key,
     required this.sdk,
     this.requireActiveLiveness = true,
-  }) : super(key: key);
+  });
 
   @override
   State<EnrollFaceScreen> createState() => _EnrollFaceScreenState();
 }
 
 class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
-  CameraController? _CameraController;
+  CameraController? _cameraController;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableClassification: true,
@@ -57,19 +57,19 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
       orElse: () => cameras.first,
     );
 
-    _CameraController = CameraController(
+    _cameraController = CameraController(
       front,
-      ResolutionPreset.high,
+      ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: Platform.isAndroid
           ? ImageFormatGroup.nv21
           : ImageFormatGroup.bgra8888,
     );
 
-    await _CameraController!.initialize();
+    await _cameraController!.initialize();
     if (!mounted) return;
 
-    _CameraController!.startImageStream(_handleCameraImage);
+    _cameraController!.startImageStream(_handleCameraImage);
     setState(() {});
   }
 
@@ -88,7 +88,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
         image.width.toDouble(),
         image.height.toDouble(),
       );
-      final camera = _CameraController!.description;
+      final camera = _cameraController!.description;
       final imageRotation =
           InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
           InputImageRotation.rotation270deg;
@@ -166,13 +166,13 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
               _instructionText = "Verification Complete. Processing...";
               _borderColor = Colors.green;
             });
-            await _CameraController!.stopImageStream();
+            await _cameraController!.stopImageStream();
             await _captureAndEnroll();
           }
         }
       }
     } catch (e) {
-      debugPrint("Error processing frame: \$e");
+      debugPrint("Error processing frame: $e");
     } finally {
       if (mounted) _isProcessing = false;
     }
@@ -180,7 +180,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
 
   Future<void> _captureAndEnroll() async {
     try {
-      final xFile = await _CameraController!.takePicture();
+      final xFile = await _cameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
       final base64String = base64Encode(bytes);
 
@@ -202,7 +202,7 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
 
   @override
   void dispose() {
-    _CameraController?.dispose();
+    _cameraController?.dispose();
     _faceDetector.close();
     super.dispose();
   }
@@ -214,9 +214,9 @@ class _EnrollFaceScreenState extends State<EnrollFaceScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_CameraController != null &&
-              _CameraController!.value.isInitialized)
-            CameraPreview(_CameraController!),
+          if (_cameraController != null &&
+              _cameraController!.value.isInitialized)
+            CameraPreview(_cameraController!),
 
           // Aadhaar clean white overlay
           CustomPaint(

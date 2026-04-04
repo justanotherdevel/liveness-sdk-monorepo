@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -39,7 +38,7 @@ class LiveFaceAuth {
   late final FaceMatchEngine _faceMatchEngine;
 
   final String _serverBaseUrl =
-      "http://localhost:8000"; // Should be configured via constructor
+      "http://192.168.88.7:8000"; // Changed to local IP as per user configuration
   String? _apiKey;
 
   // Private constructor
@@ -78,7 +77,7 @@ class LiveFaceAuth {
     if (needsValidation) {
       try {
         final response = await http.post(
-          Uri.parse("\$_serverBaseUrl/validate_key"),
+          Uri.parse("$_serverBaseUrl/validate_key"),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode({"api_key": apiKey}),
         );
@@ -90,21 +89,39 @@ class LiveFaceAuth {
               value: DateTime.now().toIso8601String(),
             );
           } else {
-            throw Exception("API Key is invalid or inactive");
+            // Server responded but explicitly rejected the key — hard fail.
+            final reason = data['message'] ?? 'invalid or inactive';
+            throw Exception("API Key rejected by server: $reason");
           }
+        } else {
+          // Non-200 from validate_key endpoint — treat as hard fail.
+          throw Exception(
+            "API Key validation failed with status ${response.statusCode}");
         }
-      } catch (e) {
+      } on SocketException catch (e) {
+        // Network unreachable — use cached validation if available.
+        if (lastValidation == null) {
+          throw Exception(
+            "No network and no previously validated key. Cannot initialize SDK.");
+        }
         debugPrint(
-          "Could not validate key online. Continuing with previously validated settings if available.",
-        );
+          "[LiveFaceAuth] Network unavailable, using cached key validation: $e");
+      } on http.ClientException catch (e) {
+        // HTTP-level connectivity error — same offline fallback.
+        if (lastValidation == null) {
+          throw Exception(
+            "No network and no previously validated key. Cannot initialize SDK.");
+        }
+        debugPrint(
+          "[LiveFaceAuth] HTTP error during key validation, using cache: $e");
       }
     }
   }
 
   Future<String> _writeBase64ToTempFile(String base64String) async {
-    final tempDir = await getTemporaryDirectory();
+    final tempDirPath = (await getTemporaryDirectory()).path;
     final tempFile = File(
-      "\${tempDir.path}/temp_\${DateTime.now().microsecondsSinceEpoch}.jpg",
+      "$tempDirPath/temp_${DateTime.now().microsecondsSinceEpoch}.jpg",
     );
     await tempFile.writeAsBytes(base64Decode(base64String));
     return tempFile.path;
@@ -228,27 +245,45 @@ class LiveFaceAuth {
       );
       if (targetCropped == null) return FaceAuthResult(success: false);
 
+      // --- DEBUG: Save crops to device storage ---
+      if (kDebugMode) {
+        final docsDir = await getApplicationDocumentsDirectory();
+        final ts = DateTime.now().millisecondsSinceEpoch;
+        final refPath = '${docsDir.path}/debug_ref_$ts.jpg';
+        final tgtPath = '${docsDir.path}/debug_tgt_$ts.jpg';
+        await File(refPath).writeAsBytes(refCropped);
+        await File(tgtPath).writeAsBytes(targetCropped);
+        debugPrint('[LiveFaceAuth][DEBUG] Reference crop saved: $refPath');
+        debugPrint('[LiveFaceAuth][DEBUG] Target crop saved:    $tgtPath');
+        debugPrint('[LiveFaceAuth][DEBUG] ref size: ${refCropped.length} bytes, tgt size: ${targetCropped.length} bytes');
+      }
+      // -------------------------------------------
       // Step 2: Passive Liveness
       if (passiveLiveness) {
         final score = await _passiveLivenessEngine.checkLiveness(targetCropped);
         passiveLivenessResult = score > 0.8;
+        debugPrint("[LiveFaceAuth] Passive liveness score: $score => passed: $passiveLivenessResult");
 
         if (!passiveLivenessResult && !proceedIfLivenessFail) {
+          debugPrint("[LiveFaceAuth] Spoof detected. Returning early.");
           return FaceAuthResult(
             success: false,
+            strong: false,
             passiveLivenessResult: passiveLivenessResult,
           ); // Spoof detected
         }
       }
 
-      // Step 3: ArcFace Local Matching
+      // Step 3: Local Face Matching
       final targetVector = await _faceMatchEngine.vectorizeFace(targetCropped);
       final similarity = await _faceMatchEngine.compareVectors(
         refVector,
         targetVector,
       );
+      debugPrint("[LiveFaceAuth] Local similarity score: $similarity (threshold: $threshold)");
 
       if (similarity >= threshold) {
+        debugPrint("[LiveFaceAuth] Local match PASSED.");
         return FaceAuthResult(
           success: true,
           strong: true,
@@ -258,10 +293,12 @@ class LiveFaceAuth {
       }
 
       // Step 4: Fallback to FastAPI server for high-accuracy processing
+      debugPrint("[LiveFaceAuth] Local match failed ($similarity < $threshold). Falling back to server...");
       final fallbackResult = await _serverFallbackCompare(
         refCropped,
         targetCropped,
       );
+      debugPrint("[LiveFaceAuth] Server fallback result: success=${fallbackResult.success}, strong=${fallbackResult.strong}");
       return FaceAuthResult(
         success: fallbackResult.success,
         strong: fallbackResult.strong,
@@ -281,7 +318,7 @@ class LiveFaceAuth {
     try {
       final request = http.MultipartRequest(
         "POST",
-        Uri.parse("\$_serverBaseUrl/compare_faces"),
+        Uri.parse("$_serverBaseUrl/compare_faces"),
       );
       request.fields['api_key'] = _apiKey ?? "";
       request.fields['cropped'] = "true";
@@ -303,14 +340,20 @@ class LiveFaceAuth {
       );
 
       final response = await request.send();
+      debugPrint("[LiveFaceAuth] Server fallback response status: ${response.statusCode}");
       if (response.statusCode == 200) {
         final respStr = await response.stream.bytesToString();
         final data = jsonDecode(respStr);
+        debugPrint("[LiveFaceAuth] Server fallback response: $data");
         // Fallback returned final authorization decision
         return FaceAuthResult(success: data['success'] ?? false, strong: true);
+      } else {
+        final respStr = await response.stream.bytesToString();
+        debugPrint("[LiveFaceAuth] Server fallback error body: $respStr");
       }
     } catch (e) {
       // Device offline or network failure, returning weak failure explicitly per instructions
+      debugPrint("[LiveFaceAuth] Server fallback exception: $e");
       return FaceAuthResult(success: false, strong: false);
     }
     return FaceAuthResult(success: false, strong: false);

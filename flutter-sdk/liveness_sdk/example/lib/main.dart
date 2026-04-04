@@ -6,7 +6,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Real APIs would normally be fetched securely, this is just demonstrating SDK initialization
-  final sdk = await LiveFaceAuth.initialize(apiKey: "example_test_key");
+  final sdk = await LiveFaceAuth.initialize(apiKey: "test-api-key-123");
 
   runApp(MyApp(sdk: sdk));
 }
@@ -14,7 +14,7 @@ void main() async {
 class MyApp extends StatelessWidget {
   final LiveFaceAuth sdk;
 
-  const MyApp({Key? key, required this.sdk}) : super(key: key);
+  const MyApp({super.key, required this.sdk});
 
   @override
   Widget build(BuildContext context) {

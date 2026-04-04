@@ -13,14 +13,14 @@ class ActiveLivenessEngine {
   bool _shakeRight = false;
 
   // Experimental Thresholds (Can be adjusted based on field testing)
-  static const double EYE_CLOSED_THRESHOLD = 0.2;
-  static const double EYE_OPEN_THRESHOLD = 0.85;
+  static const double eyeClosedThreshold = 0.2;
+  static const double eyeOpenThreshold = 0.85;
 
-  static const double HEAD_PITCH_UP_THRESHOLD = 12.0;
-  static const double HEAD_PITCH_DOWN_THRESHOLD = -12.0;
+  static const double headPitchUpThreshold = 12.0;
+  static const double headPitchDownThreshold = -12.0;
 
-  static const double HEAD_YAW_LEFT_THRESHOLD = -15.0;
-  static const double HEAD_YAW_RIGHT_THRESHOLD = 15.0;
+  static const double headYawLeftThreshold = -15.0;
+  static const double headYawRightThreshold = 15.0;
 
   /// Resets the engine state.
   /// MUST be called whenever a new challenge begins or is switched.
@@ -60,13 +60,13 @@ class ActiveLivenessEngine {
     final double rightEye = face.rightEyeOpenProbability!;
 
     // Registration of the start of a blink (eyes closed)
-    if (leftEye < EYE_CLOSED_THRESHOLD && rightEye < EYE_CLOSED_THRESHOLD) {
+    if (leftEye < eyeClosedThreshold && rightEye < eyeClosedThreshold) {
       _blinkStarted = true;
     }
     // Registration of the end of a blink (eyes open AFTER having been closed)
     else if (_blinkStarted &&
-        leftEye > EYE_OPEN_THRESHOLD &&
-        rightEye > EYE_OPEN_THRESHOLD) {
+        leftEye > eyeOpenThreshold &&
+        rightEye > eyeOpenThreshold) {
       _blinkStarted = false;
       return true; // Challenge completed
     }
@@ -78,9 +78,9 @@ class ActiveLivenessEngine {
     // headEulerAngleX represents pitch (looking up is positive, down is negative).
     final double pitch = face.headEulerAngleX ?? 0.0;
 
-    if (pitch > HEAD_PITCH_UP_THRESHOLD) {
+    if (pitch > headPitchUpThreshold) {
       _nodUp = true;
-    } else if (pitch < HEAD_PITCH_DOWN_THRESHOLD) {
+    } else if (pitch < headPitchDownThreshold) {
       _nodDown = true;
     }
 
@@ -99,9 +99,9 @@ class ActiveLivenessEngine {
     // headEulerAngleY represents yaw (looking right is positive, left is negative).
     final double yaw = face.headEulerAngleY ?? 0.0;
 
-    if (yaw < HEAD_YAW_LEFT_THRESHOLD) {
+    if (yaw < headYawLeftThreshold) {
       _shakeLeft = true;
-    } else if (yaw > HEAD_YAW_RIGHT_THRESHOLD) {
+    } else if (yaw > headYawRightThreshold) {
       _shakeRight = true;
     }
 

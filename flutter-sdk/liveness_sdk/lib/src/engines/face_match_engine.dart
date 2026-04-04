@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
@@ -16,16 +15,17 @@ class FaceMatchEngine {
     try {
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
-      // TODO: Place arcface.onnx in assets/models/
-      final rawAssetFile = await rootBundle.load('assets/models/arcface.onnx');
+      // Loading mobilefacenet model from assets
+      final rawAssetFile = await rootBundle.load('packages/flutter_face_auth_sdk/assets/models/mobilefacenet.onnx');
       _mlSession = OrtSession.fromBuffer(
         rawAssetFile.buffer.asUint8List(),
         sessionOptions,
       );
       _isInitialized = true;
       debugPrint("[Face Match Engine] ONNX Model initialized.");
-    } catch (e) {
-      debugPrint("[Face Match Engine] Failed to initialize model: \$e");
+    } catch (e, stackTrace) {
+      debugPrint("[Face Match Engine] Failed to initialize model: $e");
+      debugPrint("[Face Match Engine] Stack trace: $stackTrace");
     }
   }
 
@@ -47,12 +47,13 @@ class FaceMatchEngine {
 
     final tensorBuffer = await Isolate.run(() {
       debugPrint(
-        "[Face Match Engine] Background Isolate: Decoding and resizing image to \${inputSize}x\${inputSize}...",
+        "[Face Match Engine] Background Isolate: Decoding and resizing image to ${inputSize}x$inputSize...",
       );
 
       final decodedImage = img.decodeImage(croppedFaceBytes);
-      if (decodedImage == null)
+      if (decodedImage == null) {
         throw Exception("Failed to decode cropped face image bytes.");
+      }
 
       final resizedImage = img.copyResize(
         decodedImage,
@@ -66,20 +67,18 @@ class FaceMatchEngine {
       for (int y = 0; y < inputSize; y++) {
         for (int x = 0; x < inputSize; x++) {
           final pixel = resizedImage.getPixel(x, y);
-          // Normalizing pixel value distribution depending on specific arcface standards
-          // Frequently: (pixel - 127.5) / 128.0
+          // Normalizing pixel value distribution depending on specific model standards
+          // Commonly (pixel - 127.5) / 128.0. NHWC memory layout.
           buffer[pixelIndex] = (pixel.r - 127.5) / 128.0;
-          buffer[inputSize * inputSize + pixelIndex] =
-              (pixel.g - 127.5) / 128.0;
-          buffer[2 * inputSize * inputSize + pixelIndex] =
-              (pixel.b - 127.5) / 128.0;
-          pixelIndex++;
+          buffer[pixelIndex + 1] = (pixel.g - 127.5) / 128.0;
+          buffer[pixelIndex + 2] = (pixel.b - 127.5) / 128.0;
+          pixelIndex += 3;
         }
       }
       return buffer;
     });
 
-    final shape = [1, 3, inputSize, inputSize];
+    final shape = [1, inputSize, inputSize, 3];
     final inputTensor = OrtValueTensor.createTensorWithDataList(
       tensorBuffer,
       shape,
@@ -89,8 +88,7 @@ class FaceMatchEngine {
     List<double> faceVector = [];
 
     try {
-      // Modify 'data' to exactly match the input node name of arcface.onnx
-      final inputs = {'data': inputTensor};
+      final inputs = {'serving_default_keras_tensor:0': inputTensor};
       final outputs = _mlSession!.run(runOptions, inputs);
 
       if (outputs.isNotEmpty) {
@@ -110,7 +108,7 @@ class FaceMatchEngine {
         out?.release();
       }
     } catch (e) {
-      debugPrint("[Face Match Engine] ONNX Inference Error: \$e");
+      debugPrint("[Face Match Engine] ONNX Inference Error: $e");
     } finally {
       inputTensor.release();
       runOptions.release();
