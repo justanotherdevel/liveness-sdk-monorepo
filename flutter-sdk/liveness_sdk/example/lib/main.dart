@@ -7,7 +7,7 @@ void main() async {
 
   // Real APIs would normally be fetched securely, this is just demonstrating SDK initialization
   final sdk = await LiveFaceAuth.initialize(
-    apiKey: "kNso-2XK4F7B1skoxvQ7RB7jOcFYMFKHMvWVWoY2f-Q",
+    apiKey: "xXWn9_HSIKBCDf-nDeRn7DKYZwD8FrRdPFUnfFJOOD8",
   );
 
   runApp(MyApp(sdk: sdk));

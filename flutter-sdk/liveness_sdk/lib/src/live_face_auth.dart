@@ -45,7 +45,7 @@ class LiveFaceAuth {
   late final LocalLogStore _logStore;
   late final LogSyncService _logSync;
 
-  final String _serverBaseUrl = "http://shashwatdesktop.lan:8000";
+  final String _serverBaseUrl = "https://liveness.yars.ai";
   String? _apiKey;
 
   // Private constructor

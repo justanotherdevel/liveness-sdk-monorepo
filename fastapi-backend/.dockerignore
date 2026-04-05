@@ -1,0 +1,30 @@
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+openvino_venv/
+*_venv/        # catch any other custom-named venvs
+
+# ── Models (volume-mounted at runtime — never bake into the image) ────────────
+models/
+
+# ── Secrets & local config ────────────────────────────────────────────────────
+.env
+*.env
+
+# ── Dev / editor artefacts ────────────────────────────────────────────────────
+.git/
+.gitignore
+*.md
+.DS_Store
+
+# ── Build artefacts ───────────────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
