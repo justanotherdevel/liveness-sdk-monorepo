@@ -1,8 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' show exp;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:onnxruntime/onnxruntime.dart';
 
@@ -10,23 +10,21 @@ class PassiveLivenessEngine {
   OrtSession? _mlSession;
   bool _isInitialized = false;
 
-  /// Initializes the minifasnet ONNX model from the assets directory.
-  Future<void> initialize() async {
+  /// Initializes the minifasnet ONNX model from a local [modelFile].
+  /// The file is obtained from [ModelDownloadService.getModelFile].
+  Future<void> initialize(File modelFile) async {
     try {
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
-      final rawAssetFile = await rootBundle.load(
-        'packages/flutter_face_auth_sdk/assets/models/minifasnet.onnx',
-      );
       _mlSession = OrtSession.fromBuffer(
-        rawAssetFile.buffer.asUint8List(),
+        await modelFile.readAsBytes(),
         sessionOptions,
       );
       _isInitialized = true;
-      debugPrint("[Passive Liveness Engine] ONNX Model initialized.");
+      debugPrint('[Passive Liveness Engine] ONNX Model initialized from ${modelFile.path}.');
     } catch (e, stackTrace) {
-      debugPrint("[Passive Liveness Engine] Failed to initialize model: $e");
-      debugPrint("[Passive Liveness Engine] Stack trace: $stackTrace");
+      debugPrint('[Passive Liveness Engine] Failed to initialize model: $e');
+      debugPrint('[Passive Liveness Engine] Stack trace: $stackTrace');
     }
   }
 

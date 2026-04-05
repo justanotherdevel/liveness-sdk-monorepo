@@ -12,6 +12,7 @@ import 'engines/face_match_engine.dart';
 import 'log/local_log_store.dart';
 import 'log/log_sync_service.dart';
 import 'log/sdk_log_entry.dart';
+import 'model_download_service.dart';
 
 class FaceAuthResult {
   final bool success;
@@ -50,7 +51,8 @@ class LiveFaceAuth {
   // Private constructor
   LiveFaceAuth._();
 
-  /// Initializes the SDK, validates the API key, and sets up local logging.
+  /// Initializes the SDK, downloads models if needed, validates the API key,
+  /// and sets up local logging.
   static Future<LiveFaceAuth> initialize({required String apiKey}) async {
     final sdk = LiveFaceAuth._();
     sdk._apiKey = apiKey;
@@ -68,9 +70,21 @@ class LiveFaceAuth {
       apiKey: apiKey,
     );
 
-    // Initialize ML models
-    await sdk._passiveLivenessEngine.initialize();
-    await sdk._faceMatchEngine.initialize();
+    // Download (or verify) ONNX models from the server
+    debugPrint('[LiveFaceAuth] Ensuring models are up-to-date…');
+    final downloader = ModelDownloadService(
+      serverBaseUrl: sdk._serverBaseUrl,
+      apiKey: apiKey,
+    );
+    await downloader.ensureModelsReady();
+
+    // Initialize ML engines with downloaded model files
+    await sdk._passiveLivenessEngine.initialize(
+      await downloader.getModelFile('minifasnet.onnx'),
+    );
+    await sdk._faceMatchEngine.initialize(
+      await downloader.getModelFile('mobilefacenet.onnx'),
+    );
 
     // Validate API key (online check with offline cache fallback)
     await sdk._validateKey(apiKey);

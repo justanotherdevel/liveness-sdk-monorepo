@@ -22,6 +22,7 @@ dependencies:
   sqflite: ^2.4.2
   uuid: ^4.5.3
   path: ^1.9.1
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:
@@ -54,10 +55,8 @@ flutter:
         pluginClass: somePluginClass
     # -------------------
 
-  assets:
-    - assets/models/minifasnet.onnx
-    - assets/models/mobilefacenet.onnx
-  #   - images/a_dot_ham.jpeg
+  # Models are NOT bundled. They are downloaded at runtime from the FastAPI
+  # server by ModelDownloadService and cached in getApplicationSupportDirectory().
   #
   # For details regarding assets in packages, see
   # https://flutter.dev/to/asset-from-package

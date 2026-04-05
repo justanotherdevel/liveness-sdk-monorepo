@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import json
 import os
 import time
@@ -6,7 +7,7 @@ import time
 import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from insightface.app import FaceAnalysis
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -15,6 +16,14 @@ import models
 import schemas
 from database import engine, get_db
 from admin_router import router as admin_router
+
+# ── Model directory ─────────────────────────────────────────────────────────────
+# Models are mounted at /app/models — same volume as InsightFace weights.
+# The two ONNX files for the Flutter SDK live here:
+#   /app/models/minifasnet.onnx
+#   /app/models/mobilefacenet.onnx
+_MODELS_DIR = os.environ.get("MODELS_DIR", "./models")
+_ALLOWED_MODELS = {"minifasnet.onnx", "mobilefacenet.onnx"}
 
 # ── DB bootstrap ────────────────────────────────────────────────────────────────
 models.Base.metadata.create_all(bind=engine)
@@ -104,6 +113,11 @@ def get_embedding_from_image(
 
 # ── API endpoints ───────────────────────────────────────────────────────────────
 
+@app.get("/validate_key", include_in_schema=False)  # convenience redirect for browsers
+async def validate_key_get():
+    return RedirectResponse("/admin/keys")
+
+
 @app.post("/validate_key", response_model=schemas.ValidateKeyResponse)
 def validate_key(request: schemas.ValidateKeyRequest, db: Session = Depends(get_db)):
     db_key = db.query(models.APIKey).filter(models.APIKey.key == request.api_key).first()
@@ -116,6 +130,55 @@ def validate_key(request: schemas.ValidateKeyRequest, db: Session = Depends(get_
         return {"is_valid": False, "message": "API Key has expired"}
 
     return {"is_valid": True, "expires_at": db_key.expires_at}
+
+
+# ── Model distribution ────────────────────────────────────────────────────────
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+@app.get("/models/manifest")
+def models_manifest(
+    api_key: str,
+    db: Session = Depends(get_db),
+):
+    """Returns name + sha256 + size_bytes for each available ONNX model.
+    Clients use this to decide whether a cached copy is still current."""
+    verify_api_key(api_key, db)
+    manifest = {}
+    for name in _ALLOWED_MODELS:
+        path = os.path.join(_MODELS_DIR, name)
+        if os.path.isfile(path):
+            manifest[name] = {
+                "sha256": _sha256(path),
+                "size_bytes": os.path.getsize(path),
+            }
+    return JSONResponse(manifest)
+
+
+@app.get("/models/download/{filename}")
+def download_model(
+    filename: str,
+    api_key: str,
+    db: Session = Depends(get_db),
+):
+    """Streams an ONNX model file to authenticated SDK clients."""
+    verify_api_key(api_key, db)
+    if filename not in _ALLOWED_MODELS:
+        raise HTTPException(status_code=404, detail="Model not found")
+    path = os.path.join(_MODELS_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Model file missing on server")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=filename,
+    )
 
 
 @app.post("/compare_faces")

@@ -1,7 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:flutter/foundation.dart';
 import 'package:onnxruntime/onnxruntime.dart';
@@ -10,24 +10,21 @@ class FaceMatchEngine {
   OrtSession? _mlSession;
   bool _isInitialized = false;
 
-  /// Initializes the arcface ONNX model from the assets directory.
-  Future<void> initialize() async {
+  /// Initializes the arcface ONNX model from a local [modelFile].
+  /// The file is obtained from [ModelDownloadService.getModelFile].
+  Future<void> initialize(File modelFile) async {
     try {
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
-      // Loading mobilefacenet model from assets
-      final rawAssetFile = await rootBundle.load(
-        'packages/flutter_face_auth_sdk/assets/models/mobilefacenet.onnx',
-      );
       _mlSession = OrtSession.fromBuffer(
-        rawAssetFile.buffer.asUint8List(),
+        await modelFile.readAsBytes(),
         sessionOptions,
       );
       _isInitialized = true;
-      debugPrint("[Face Match Engine] ONNX Model initialized.");
+      debugPrint('[Face Match Engine] ONNX Model initialized from ${modelFile.path}.');
     } catch (e, stackTrace) {
-      debugPrint("[Face Match Engine] Failed to initialize model: $e");
-      debugPrint("[Face Match Engine] Stack trace: $stackTrace");
+      debugPrint('[Face Match Engine] Failed to initialize model: $e');
+      debugPrint('[Face Match Engine] Stack trace: $stackTrace');
     }
   }
 
