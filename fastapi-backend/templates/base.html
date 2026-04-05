@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Liveness Admin{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #161920;
+      --surface2: #1e2230;
+      --border: #2a2f42;
+      --accent: #4f8ef7;
+      --accent-dim: #2b4d8f;
+      --success: #22c97a;
+      --danger: #f75050;
+      --warn: #f0a843;
+      --text: #e2e6f0;
+      --text-muted: #7a8099;
+      --radius: 10px;
+      --sidebar-w: 240px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 28px 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+    }
+
+    .sidebar-logo {
+      padding: 0 24px 28px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .sidebar-logo span {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      background: linear-gradient(135deg, #4f8ef7, #a78bfa);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .sidebar-logo small {
+      display: block;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+      margin-top: 2px;
+      -webkit-text-fill-color: var(--text-muted);
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 24px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13.5px;
+      font-weight: 500;
+      border-left: 3px solid transparent;
+      transition: all .15s;
+    }
+
+    .nav-item:hover,
+    .nav-item.active {
+      color: var(--text);
+      background: var(--surface2);
+      border-left-color: var(--accent);
+    }
+
+    .nav-icon {
+      font-size: 16px;
+      width: 20px;
+      text-align: center;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 20px 24px 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .logout-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--danger);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 0;
+      opacity: .8;
+      transition: opacity .15s;
+    }
+
+    .logout-btn:hover {
+      opacity: 1;
+    }
+
+    /* ── Main content ────────────────────────────────────────────────────── */
+    .main {
+      margin-left: var(--sidebar-w);
+      flex: 1;
+      padding: 40px 48px;
+      max-width: calc(100vw - var(--sidebar-w));
+    }
+
+    .page-header {
+      margin-bottom: 32px;
+    }
+
+    .page-header h1 {
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .page-header p {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-top: 6px;
+    }
+
+    /* ── Cards ───────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      margin-bottom: 16px;
+    }
+
+    /* ── Alert flash ─────────────────────────────────────────────────────── */
+    .flash {
+      padding: 12px 18px;
+      border-radius: var(--radius);
+      font-size: 13.5px;
+      margin-bottom: 24px;
+      border-left: 4px solid;
+    }
+
+    .flash.success {
+      background: rgba(34, 201, 122, .1);
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .flash.error {
+      background: rgba(247, 80, 80, .1);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .flash.info {
+      background: rgba(79, 142, 247, .1);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      text-decoration: none;
+      transition: filter .15s, transform .1s;
+    }
+
+    .btn:active {
+      transform: scale(.97);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      filter: brightness(1.15);
+    }
+
+    .btn-danger {
+      background: rgba(247, 80, 80, .15);
+      color: var(--danger);
+      border: 1px solid var(--danger);
+    }
+
+    .btn-danger:hover {
+      background: rgba(247, 80, 80, .25);
+    }
+
+    .btn-ghost {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+      filter: brightness(1.1);
+    }
+
+    .btn-sm {
+      padding: 5px 12px;
+      font-size: 12px;
+    }
+
+    /* ── Form elements ───────────────────────────────────────────────────── */
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 7px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .form-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color .15s;
+      outline: none;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent);
+    }
+
+    .form-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* ── Table ───────────────────────────────────────────────────────────── */
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+    }
+
+    th {
+      text-align: left;
+      padding: 10px 16px;
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      vertical-align: middle;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, .02);
+    }
+
+    /* ── Badges ──────────────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: .3px;
+    }
+
+    .badge-success {
+      background: rgba(34, 201, 122, .15);
+      color: var(--success);
+    }
+
+    .badge-danger {
+      background: rgba(247, 80, 80, .15);
+      color: var(--danger);
+    }
+
+    /* ── Monospace key display ────────────────────────────────────────────── */
+    .key-mono {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--accent);
+      background: rgba(79, 142, 247, .08);
+      padding: 3px 8px;
+      border-radius: 5px;
+      letter-spacing: .5px;
+    }
+
+    /* ── New key reveal box ──────────────────────────────────────────────── */
+    .new-key-box {
+      background: rgba(34, 201, 122, .07);
+      border: 1px solid rgba(34, 201, 122, .3);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      margin-bottom: 28px;
+    }
+
+    .new-key-box h3 {
+      font-size: 13px;
+      color: var(--success);
+      margin-bottom: 8px;
+    }
+
+    .new-key-value {
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      color: var(--success);
+      word-break: break-all;
+      margin-bottom: 8px;
+    }
+
+    .new-key-box small {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    /* ── Stat cards ─────────────────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .stat-card .label {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+
+    .stat-card .value.accent {
+      color: var(--accent);
+    }
+
+    .stat-card .value.success {
+      color: var(--success);
+    }
+
+    .stat-card .value.danger {
+      color: var(--danger);
+    }
+  </style>
+</head>
+
+<body>
+
+  {% if request.session.get('admin_logged_in') %}
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span>🔐 Liveness Admin</span>
+      <small>Face Auth Backend</small>
+    </div>
+    <a href="/admin/keys" class="nav-item {% if active_page == 'keys' %}active{% endif %}">
+      <span class="nav-icon">🗝️</span> API Keys
+    </a>
+    <a href="/admin/logs" class="nav-item {% if active_page == 'logs' %}active{% endif %}">
+      <span class="nav-icon">📋</span> Logs
+    </a>
+    <div class="sidebar-footer">
+      <a href="/admin/logout" class="logout-btn">
+        <span>↩</span> Logout
+      </a>
+    </div>
+  </nav>
+  {% endif %}
+
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+
+</body>
+
+</html>

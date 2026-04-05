@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Login · Liveness Admin{% endblock %}
+
+{% block content %}
+<style>
+  body { align-items: center; justify-content: center; }
+  .main {
+    margin-left: 0 !important;
+    max-width: 100vw !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .login-wrap {
+    width: 100%;
+    max-width: 400px;
+  }
+  .brand {
+    text-align: center;
+    margin-bottom: 36px;
+  }
+  .brand-icon {
+    font-size: 44px;
+    display: block;
+    margin-bottom: 12px;
+  }
+  .brand h1 {
+    font-size: 22px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #4f8ef7, #a78bfa);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .brand p {
+    color: var(--text-muted);
+    font-size: 13.5px;
+    margin-top: 6px;
+  }
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 32px;
+  }
+  .submit-btn {
+    width: 100%;
+    justify-content: center;
+    padding: 12px;
+    font-size: 14.5px;
+    border-radius: 10px;
+    margin-top: 4px;
+  }
+  .submit-btn:hover { filter: brightness(1.12); }
+</style>
+
+<div class="login-wrap">
+  <div class="brand">
+    <span class="brand-icon">🔐</span>
+    <h1>Liveness Admin</h1>
+    <p>Face Authentication Backend</p>
+  </div>
+
+  {% if error %}
+  <div class="flash error" style="margin-bottom: 20px;">
+    ⚠ {{ error }}
+  </div>
+  {% endif %}
+
+  <div class="login-card">
+    <form method="post" action="/admin/login">
+      <div class="form-group">
+        <label class="form-label">Username</label>
+        <input
+          class="form-input"
+          type="text"
+          name="username"
+          autocomplete="username"
+          placeholder="admin"
+          required
+        />
+      </div>
+      <div class="form-group" style="margin-bottom: 24px;">
+        <label class="form-label">Password</label>
+        <input
+          class="form-input"
+          type="password"
+          name="password"
+          autocomplete="current-password"
+          placeholder="••••••••"
+          required
+        />
+      </div>
+      <button type="submit" class="btn btn-primary submit-btn">
+        Sign in →
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

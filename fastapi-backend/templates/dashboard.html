@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% set active_page = 'keys' %}
+
+{% block title %}API Keys · Liveness Admin{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>🗝️ API Keys</h1>
+  <p>Generate, manage, and revoke API keys for SDK authentication.</p>
+</div>
+
+{# ── Stat row ──────────────────────────────────────────────────────────── #}
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="label">Total Keys</div>
+    <div class="value accent">{{ keys | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Active</div>
+    <div class="value success">{{ keys | selectattr('is_active') | list | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Inactive</div>
+    <div class="value danger">{{ keys | rejectattr('is_active') | list | length }}</div>
+  </div>
+</div>
+
+{# ── New key reveal (shown once after creation) ───────────────────────── #}
+{% if new_key %}
+<div class="new-key-box">
+  <h3>✅ New API Key Created — copy it now, it won't be shown again</h3>
+  <div class="new-key-value" id="new-key-val">{{ new_key }}</div>
+  <div style="display:flex; gap:10px; align-items:center; margin-top:10px;">
+    <button class="btn btn-ghost btn-sm" onclick="copyKey()">📋 Copy</button>
+    <small id="copy-msg" style="color:var(--success);display:none;">Copied!</small>
+  </div>
+</div>
+{% endif %}
+
+{# ── Flash messages ────────────────────────────────────────────────────── #}
+{% if flash %}
+<div class="flash {{ flash.type }}">{{ flash.message }}</div>
+{% endif %}
+
+{# ── Create form ──────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom: 28px;">
+  <div class="card-title">Create New API Key</div>
+  <form method="post" action="/admin/keys/create" style="display:flex; gap:12px; align-items:flex-end;">
+    <div class="form-group" style="flex:1; margin-bottom:0;">
+      <label class="form-label">Key Name / Label</label>
+      <input
+        class="form-input"
+        type="text"
+        name="name"
+        placeholder="e.g. Production App, Dev Testing…"
+        required
+        maxlength="120"
+      />
+    </div>
+    <button type="submit" class="btn btn-primary" style="white-space:nowrap;">
+      ＋ Generate Key
+    </button>
+  </form>
+</div>
+
+{# ── Keys table ────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-title">All Keys</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>Key</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Expires</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in keys %}
+        <tr>
+          <td style="color:var(--text-muted);">{{ key.id }}</td>
+          <td style="font-weight:600;">{{ key.name }}</td>
+          <td>
+            {# Show last 8 chars only for security #}
+            <span class="key-mono">
+              ••••••••{{ key.key[-8:] }}
+            </span>
+          </td>
+          <td>
+            {% if key.is_active %}
+              <span class="badge badge-success">Active</span>
+            {% else %}
+              <span class="badge badge-danger">Inactive</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--text-muted); font-size:12.5px;">
+            {{ key.created_at.strftime('%d %b %Y, %H:%M') if key.created_at else '—' }}
+          </td>
+          <td style="color:var(--text-muted); font-size:12.5px;">
+            {{ key.expires_at.strftime('%d %b %Y') if key.expires_at else 'Never' }}
+          </td>
+          <td>
+            <div style="display:flex; gap:8px;">
+              {# Toggle active/inactive #}
+              <form method="post" action="/admin/keys/{{ key.id }}/toggle">
+                <button type="submit" class="btn btn-ghost btn-sm"
+                  title="{{ 'Deactivate' if key.is_active else 'Activate' }}">
+                  {{ '⏸' if key.is_active else '▶' }}
+                </button>
+              </form>
+              {# Delete #}
+              <form method="post" action="/admin/keys/{{ key.id }}/delete"
+                onsubmit="return confirm('Delete key « {{ key.name }} »? This cannot be undone.');">
+                <button type="submit" class="btn btn-danger btn-sm">
+                  🗑
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" style="text-align:center; color:var(--text-muted); padding: 40px;">
+            No API keys yet. Create one above.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  function copyKey() {
+    const val = document.getElementById('new-key-val');
+    if (!val) return;
+    navigator.clipboard.writeText(val.textContent.trim()).then(() => {
+      const msg = document.getElementById('copy-msg');
+      msg.style.display = 'inline';
+      setTimeout(() => msg.style.display = 'none', 2000);
+    });
+  }
+</script>
+{% endblock %}

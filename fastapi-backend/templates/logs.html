@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% set active_page = 'logs' %}
+
+{% block title %}Logs · Liveness Admin{% endblock %}
+
+{% block content %}
+<style>
+  .method-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .3px;
+  }
+  .method-init         { background: rgba(79,142,247,.13); color: var(--accent);  }
+  .method-enroll       { background: rgba(167,139,250,.13); color: #a78bfa; }
+  .method-authenticate { background: rgba(34,201,122,.13);  color: var(--success); }
+
+  .result-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    word-break: break-word;
+  }
+
+  select.form-input {
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237a8099' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+</style>
+
+<div class="page-header">
+  <h1>📋 API Logs</h1>
+  <p>All SDK events synced from devices — edge decisions and server fallbacks.</p>
+</div>
+
+{# ── Stats ─────────────────────────────────────────────────────────────── #}
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="label">Total Entries</div>
+    <div class="value accent">{{ total }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Edge Decisions</div>
+    <div class="value success">{{ edge_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Server Fallbacks</div>
+    <div class="value" style="color:var(--warn);">{{ server_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Unique Devices</div>
+    <div class="value accent">{{ device_count }}</div>
+  </div>
+</div>
+
+{# ── Filters ───────────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:24px;">
+  <div class="card-title">Filter</div>
+  <form method="get" action="/admin/logs" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+    <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+      <label class="form-label">Method</label>
+      <select class="form-input" name="method">
+        <option value="">All</option>
+        <option value="init"         {% if filters.method == 'init'         %}selected{% endif %}>init</option>
+        <option value="enroll"       {% if filters.method == 'enroll'       %}selected{% endif %}>enroll</option>
+        <option value="authenticate" {% if filters.method == 'authenticate' %}selected{% endif %}>authenticate</option>
+      </select>
+    </div>
+    <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+      <label class="form-label">Execution Mode</label>
+      <select class="form-input" name="execution_mode">
+        <option value="">All</option>
+        <option value="edge"   {% if filters.execution_mode == 'edge'   %}selected{% endif %}>Edge</option>
+        <option value="server" {% if filters.execution_mode == 'server' %}selected{% endif %}>Server</option>
+      </select>
+    </div>
+    <div class="form-group" style="margin-bottom:0;flex:2;min-width:200px;">
+      <label class="form-label">Device ID (prefix)</label>
+      <input class="form-input" type="text" name="device_id"
+             value="{{ filters.device_id or '' }}" placeholder="e.g. 3f2e1a…" />
+    </div>
+    <div class="form-group" style="margin-bottom:0;flex:1;min-width:130px;">
+      <label class="form-label">From (UTC)</label>
+      <input class="form-input" type="date" name="from_date"
+             value="{{ filters.from_date or '' }}" />
+    </div>
+    <div class="form-group" style="margin-bottom:0;flex:1;min-width:130px;">
+      <label class="form-label">To (UTC)</label>
+      <input class="form-input" type="date" name="to_date"
+             value="{{ filters.to_date or '' }}" />
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button type="submit" class="btn btn-primary">Filter</button>
+      <a href="/admin/logs" class="btn btn-ghost">Reset</a>
+    </div>
+  </form>
+</div>
+
+{# ── Table ─────────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+    <span>Log Entries</span>
+    <span style="color:var(--text-muted);font-size:12px;font-weight:400;">
+      Showing {{ logs | length }} of {{ total }} &nbsp;·&nbsp;
+      Page {{ page }} / {{ total_pages }}
+    </span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Timestamp (UTC)</th>
+          <th>Device</th>
+          <th>Request ID</th>
+          <th>Method</th>
+          <th>Mode</th>
+          <th>Result</th>
+          <th>Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td style="color:var(--text-muted);">{{ log.id }}</td>
+          <td style="color:var(--text-muted);font-size:12px;white-space:nowrap;">
+            {{ log.timestamp.strftime('%d %b %Y') }}<br/>
+            <span style="font-size:11px;">{{ log.timestamp.strftime('%H:%M:%S') }}</span>
+          </td>
+          <td>
+            <span class="key-mono" title="{{ log.device_id }}">
+              {{ log.device_id[:8] }}…
+            </span>
+          </td>
+          <td>
+            <span class="key-mono" title="{{ log.request_id }}">
+              {{ log.request_id[:8] }}…
+            </span>
+          </td>
+          <td>
+            <span class="method-badge method-{{ log.method }}">{{ log.method }}</span>
+          </td>
+          <td>
+            {% if log.execution_mode == 'server' %}
+              <span class="badge" style="background:rgba(240,168,67,.12);color:var(--warn);">server</span>
+            {% else %}
+              <span class="badge badge-success">edge</span>
+            {% endif %}
+          </td>
+          <td style="max-width:220px;">
+            {% if log.result %}
+              <span class="result-text" title="{{ log.result }}">
+                {{ log.result | truncate(60) }}
+              </span>
+            {% else %}
+              <span style="color:var(--text-muted);">—</span>
+            {% endif %}
+          </td>
+          <td style="max-width:160px;">
+            {% if log.errors %}
+              <span style="color:var(--danger);font-size:12px;" title="{{ log.errors }}">
+                {{ log.errors | truncate(40) }}
+              </span>
+            {% else %}
+              <span style="color:var(--text-muted);">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" style="text-align:center;color:var(--text-muted);padding:40px;">
+            No log entries match your filters.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ── Pagination ─────────────────────────────────────────────────────── #}
+  {% if total_pages > 1 %}
+  <div style="display:flex;justify-content:center;gap:8px;padding:20px 0 4px;">
+    {% if page > 1 %}
+      <a href="{{ pagination_url(page - 1) }}" class="btn btn-ghost btn-sm">‹ Prev</a>
+    {% endif %}
+
+    {% for p in range([1, page - 2] | max, [total_pages + 1, page + 3] | min) %}
+      <a href="{{ pagination_url(p) }}"
+         class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-ghost{% endif %}">
+        {{ p }}
+      </a>
+    {% endfor %}
+
+    {% if page < total_pages %}
+      <a href="{{ pagination_url(page + 1) }}" class="btn btn-ghost btn-sm">Next ›</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,8 +1,11 @@
 fastapi
-uvicorn
+uvicorn[standard]
 sqlalchemy
+psycopg2-binary        # PostgreSQL driver
 pydantic
 python-multipart
+jinja2
+itsdangerous           # secure cookie sessions
 insightface
 onnxruntime
 opencv-python-headless

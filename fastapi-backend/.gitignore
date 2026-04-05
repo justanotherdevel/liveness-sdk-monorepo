@@ -1,3 +1,7 @@
-venv
+venv/
 openvino_venv/
-models
+models/
+.env
+*.db
+__pycache__/
+*.pyc
