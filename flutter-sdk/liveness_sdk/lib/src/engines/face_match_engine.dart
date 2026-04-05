@@ -16,7 +16,9 @@ class FaceMatchEngine {
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
       // Loading mobilefacenet model from assets
-      final rawAssetFile = await rootBundle.load('packages/flutter_face_auth_sdk/assets/models/mobilefacenet.onnx');
+      final rawAssetFile = await rootBundle.load(
+        'packages/flutter_face_auth_sdk/assets/models/mobilefacenet.onnx',
+      );
       _mlSession = OrtSession.fromBuffer(
         rawAssetFile.buffer.asUint8List(),
         sessionOptions,

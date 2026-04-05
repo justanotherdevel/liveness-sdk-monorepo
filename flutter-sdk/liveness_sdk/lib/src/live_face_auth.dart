@@ -96,24 +96,29 @@ class LiveFaceAuth {
         } else {
           // Non-200 from validate_key endpoint — treat as hard fail.
           throw Exception(
-            "API Key validation failed with status ${response.statusCode}");
+            "API Key validation failed with status ${response.statusCode}",
+          );
         }
       } on SocketException catch (e) {
         // Network unreachable — use cached validation if available.
         if (lastValidation == null) {
           throw Exception(
-            "No network and no previously validated key. Cannot initialize SDK.");
+            "No network and no previously validated key. Cannot initialize SDK.",
+          );
         }
         debugPrint(
-          "[LiveFaceAuth] Network unavailable, using cached key validation: $e");
+          "[LiveFaceAuth] Network unavailable, using cached key validation: $e",
+        );
       } on http.ClientException catch (e) {
         // HTTP-level connectivity error — same offline fallback.
         if (lastValidation == null) {
           throw Exception(
-            "No network and no previously validated key. Cannot initialize SDK.");
+            "No network and no previously validated key. Cannot initialize SDK.",
+          );
         }
         debugPrint(
-          "[LiveFaceAuth] HTTP error during key validation, using cache: $e");
+          "[LiveFaceAuth] HTTP error during key validation, using cache: $e",
+        );
       }
     }
   }
@@ -240,29 +245,46 @@ class LiveFaceAuth {
 
     final tempFilePath = await _writeBase64ToTempFile(targetImageBase64);
     try {
-      final targetCropped = await _extractionEngine.extractFaceFromFile(
+      // Single detection pass, two crops:
+      //  - tightCrop (1.2×) → ArcFace identity matching
+      //  - livenessCrop (2.7×) → MiniFASNet spoofing detection
+      final extraction = await _extractionEngine.extractDualCropFromFile(
         filePath: tempFilePath,
       );
-      if (targetCropped == null) return FaceAuthResult(success: false);
+
+      final targetCropped = extraction.tightCrop;
+      final livenessCrop = extraction.livenessCrop;
+
+      if (targetCropped == null || livenessCrop == null) {
+        debugPrint("[LiveFaceAuth] No face detected in target image.");
+        return FaceAuthResult(success: false);
+      }
 
       // --- DEBUG: Save crops to device storage ---
       if (kDebugMode) {
         final docsDir = await getApplicationDocumentsDirectory();
         final ts = DateTime.now().millisecondsSinceEpoch;
         final refPath = '${docsDir.path}/debug_ref_$ts.jpg';
-        final tgtPath = '${docsDir.path}/debug_tgt_$ts.jpg';
+        final tgtPath = '${docsDir.path}/debug_tgt_tight_$ts.jpg';
+        final livPath = '${docsDir.path}/debug_tgt_liveness_$ts.jpg';
         await File(refPath).writeAsBytes(refCropped);
         await File(tgtPath).writeAsBytes(targetCropped);
-        debugPrint('[LiveFaceAuth][DEBUG] Reference crop saved: $refPath');
-        debugPrint('[LiveFaceAuth][DEBUG] Target crop saved:    $tgtPath');
-        debugPrint('[LiveFaceAuth][DEBUG] ref size: ${refCropped.length} bytes, tgt size: ${targetCropped.length} bytes');
+        await File(livPath).writeAsBytes(livenessCrop);
+        debugPrint('[LiveFaceAuth][DEBUG] Reference crop saved:      $refPath');
+        debugPrint('[LiveFaceAuth][DEBUG] Target tight crop saved:   $tgtPath');
+        debugPrint(
+          '[LiveFaceAuth][DEBUG] Target liveness crop saved: $livPath',
+        );
       }
       // -------------------------------------------
-      // Step 2: Passive Liveness
+
+      // Step 2: Passive Liveness — uses the WIDE 2.7× crop
       if (passiveLiveness) {
-        final score = await _passiveLivenessEngine.checkLiveness(targetCropped);
+        final score = await _passiveLivenessEngine.checkLiveness(livenessCrop);
         passiveLivenessResult = score > 0.8;
-        debugPrint("[LiveFaceAuth] Passive liveness score: $score => passed: $passiveLivenessResult");
+        debugPrint(
+          "[LiveFaceAuth] Passive liveness score: $score => passed: $passiveLivenessResult",
+        );
 
         if (!passiveLivenessResult && !proceedIfLivenessFail) {
           debugPrint("[LiveFaceAuth] Spoof detected. Returning early.");
@@ -270,17 +292,19 @@ class LiveFaceAuth {
             success: false,
             strong: false,
             passiveLivenessResult: passiveLivenessResult,
-          ); // Spoof detected
+          );
         }
       }
 
-      // Step 3: Local Face Matching
+      // Step 3: Local Face Matching — uses the TIGHT 1.2× crop
       final targetVector = await _faceMatchEngine.vectorizeFace(targetCropped);
       final similarity = await _faceMatchEngine.compareVectors(
         refVector,
         targetVector,
       );
-      debugPrint("[LiveFaceAuth] Local similarity score: $similarity (threshold: $threshold)");
+      debugPrint(
+        "[LiveFaceAuth] Local similarity score: $similarity (threshold: $threshold)",
+      );
 
       if (similarity >= threshold) {
         debugPrint("[LiveFaceAuth] Local match PASSED.");
@@ -293,12 +317,16 @@ class LiveFaceAuth {
       }
 
       // Step 4: Fallback to FastAPI server for high-accuracy processing
-      debugPrint("[LiveFaceAuth] Local match failed ($similarity < $threshold). Falling back to server...");
+      debugPrint(
+        "[LiveFaceAuth] Local match failed ($similarity < $threshold). Falling back to server...",
+      );
       final fallbackResult = await _serverFallbackCompare(
         refCropped,
         targetCropped,
       );
-      debugPrint("[LiveFaceAuth] Server fallback result: success=${fallbackResult.success}, strong=${fallbackResult.strong}");
+      debugPrint(
+        "[LiveFaceAuth] Server fallback result: success=${fallbackResult.success}, strong=${fallbackResult.strong}",
+      );
       return FaceAuthResult(
         success: fallbackResult.success,
         strong: fallbackResult.strong,
@@ -340,7 +368,9 @@ class LiveFaceAuth {
       );
 
       final response = await request.send();
-      debugPrint("[LiveFaceAuth] Server fallback response status: ${response.statusCode}");
+      debugPrint(
+        "[LiveFaceAuth] Server fallback response status: ${response.statusCode}",
+      );
       if (response.statusCode == 200) {
         final respStr = await response.stream.bytesToString();
         final data = jsonDecode(respStr);

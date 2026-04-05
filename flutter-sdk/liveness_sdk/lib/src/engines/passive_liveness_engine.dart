@@ -105,7 +105,9 @@ class PassiveLivenessEngine {
             final double spoofLogit = (row[1] as num).toDouble();
 
             // Softmax to convert logits to probabilities
-            final double maxLogit = spoofLogit > liveLogit ? spoofLogit : liveLogit;
+            final double maxLogit = spoofLogit > liveLogit
+                ? spoofLogit
+                : liveLogit;
             final double expSpoof = exp(spoofLogit - maxLogit);
             final double expLive = exp(liveLogit - maxLogit);
             livenessScore = expLive / (expSpoof + expLive);

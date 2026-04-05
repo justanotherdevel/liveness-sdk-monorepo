@@ -163,4 +163,73 @@ class FaceExtractionEngine {
       return Uint8List.fromList(img.encodeJpg(croppedImage, quality: 90));
     });
   }
+
+  /// Runs face detection ONCE and extracts two crops in a single isolate pass:
+  ///
+  /// - [tightCrop]: paddingScale=1.2, suitable for ArcFace identity matching.
+  /// - [livenessCrop]: paddingScale=2.7, required by MiniFASNet which needs
+  ///   the forehead, ears, and background context to detect spoofs. Without
+  ///   this wider crop the model only sees clean face texture and will score
+  ///   even a printed photo as "live".
+  ///
+  /// Returns null for both if no face is detected.
+  Future<FaceExtractionResult> extractDualCropFromFile({
+    required String filePath,
+    double tightScale = 1.2,
+    double livenessScale = 2.7,
+  }) async {
+    final inputImage = InputImage.fromFilePath(filePath);
+    final faces = await _faceDetector.processImage(inputImage);
+
+    if (faces.isEmpty) {
+      debugPrint("[Extraction Engine] No face detected in file.");
+      return FaceExtractionResult(null, null);
+    }
+
+    final boundingBox = faces.first.boundingBox;
+
+    return await Isolate.run(() {
+      debugPrint(
+        "[Extraction Engine] Background Isolate: Extracting dual crop (tight ${tightScale}x, liveness ${livenessScale}x)",
+      );
+      final rawBytes = File(filePath).readAsBytesSync();
+      final decodedImage = img.decodeImage(rawBytes);
+      if (decodedImage == null) return FaceExtractionResult(null, null);
+
+      final int w = decodedImage.width;
+      final int h = decodedImage.height;
+
+      Uint8List? doCrop(double scale) {
+        final int cx =
+            (boundingBox.left - (boundingBox.width * (scale - 1) / 2))
+                .toInt()
+                .clamp(0, w);
+        final int cy =
+            (boundingBox.top - (boundingBox.height * (scale - 1) / 2))
+                .toInt()
+                .clamp(0, h);
+        final int cw = (boundingBox.width * scale).toInt().clamp(1, w - cx);
+        final int ch = (boundingBox.height * scale).toInt().clamp(1, h - cy);
+        final cropped = img.copyCrop(
+          decodedImage,
+          x: cx,
+          y: cy,
+          width: cw,
+          height: ch,
+        );
+        return Uint8List.fromList(img.encodeJpg(cropped, quality: 90));
+      }
+
+      return FaceExtractionResult(doCrop(tightScale), doCrop(livenessScale));
+    });
+  }
+}
+
+/// Result of a dual-crop extraction pass.
+/// [tightCrop]    – 1.2× padded JPEG, for ArcFace / identity matching.
+/// [livenessCrop] – 2.7× padded JPEG, for MiniFASNet anti-spoofing.
+class FaceExtractionResult {
+  final Uint8List? tightCrop;
+  final Uint8List? livenessCrop;
+  const FaceExtractionResult(this.tightCrop, this.livenessCrop);
 }

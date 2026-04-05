@@ -21,7 +21,9 @@ class AuthenticateFaceScreen extends StatefulWidget {
 
 class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen> {
   CameraController? _cameraController;
-  final FaceDetector _faceDetector = FaceDetector(options: FaceDetectorOptions());
+  final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(),
+  );
 
   bool _isProcessing = false;
   bool _isAuthenticating = false;
