@@ -6,27 +6,58 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import 'package:flutter/foundation.dart';
+import '../engines/active_liveness_engine.dart';
 import '../live_face_auth.dart';
 import 'face_overlay_painter.dart';
 
 // ── Lighting thresholds ────────────────────────────────────────────────────────
-// These use a histogram-based approach that is more robust than mean-only,
-// because the camera's auto-exposure (AE) shifts the mean toward mid-gray
-// regardless of scene brightness.
-//
-// • Too dark : >40% of sampled Y pixels are below 60 (AE can't fix deep shadows)
-// • Too bright: >15% of sampled Y pixels are at 245+ (blown highlights, AE can't recover)
-const double _kDarkPixelThreshold = 60.0;   // Y below this = "dark pixel"
-const double _kDarkFraction = 0.40;          // fraction of frame that must be dark
-const double _kBrightPixelThreshold = 245.0; // Y above this = "saturated / blown"
-const double _kBrightFraction = 0.15;        // fraction of frame that must be saturated
+const double _kDarkPixelThreshold = 60.0;
+const double _kDarkFraction = 0.40;
+const double _kBrightPixelThreshold = 245.0;
+const double _kBrightFraction = 0.15;
+
+// ── Internal enums ─────────────────────────────────────────────────────────────
 
 enum _LightingStatus { unknown, ok, tooDark, tooBright }
+
+/// The auth screen moves through these phases in order.
+enum _AuthPhase {
+  lighting,   // camera on, waiting for valid lighting
+  faceAlign,  // lighting OK, waiting for face to be centred + close enough
+  challenge,  // running active liveness challenges sequentially
+  scanning,   // capturing frame + running auth pipeline
+}
+
+// ── Widget ─────────────────────────────────────────────────────────────────────
 
 class AuthenticateFaceScreen extends StatefulWidget {
   final LiveFaceAuth sdk;
 
-  const AuthenticateFaceScreen({super.key, required this.sdk});
+  /// Run passive liveness (anti-spoofing) before face matching.
+  /// Defaults to true.
+  final bool requirePassiveLiveness;
+
+  /// Run active liveness challenges (blink / nod / head-shake) before
+  /// capturing the auth frame. Defaults to false.
+  final bool requireActiveLiveness;
+
+  /// Which challenges to run when [requireActiveLiveness] is true.
+  /// Defaults to {blink}. Order is deterministic (enum order).
+  final Set<ActiveChallenge> activeChallenges;
+
+  /// If true, a failed liveness check does NOT block authentication —
+  /// face matching still proceeds. Useful for development / graceful degradation.
+  /// Defaults to false.
+  final bool proceedIfLivenessFails;
+
+  const AuthenticateFaceScreen({
+    super.key,
+    required this.sdk,
+    this.requirePassiveLiveness = true,
+    this.requireActiveLiveness = false,
+    this.activeChallenges = const {ActiveChallenge.blink},
+    this.proceedIfLivenessFails = false,
+  });
 
   @override
   State<AuthenticateFaceScreen> createState() => _AuthenticateFaceScreenState();
@@ -34,24 +65,38 @@ class AuthenticateFaceScreen extends StatefulWidget {
 
 class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     with SingleTickerProviderStateMixin {
+  // ── Camera ──────────────────────────────────────────────────────────────────
   CameraController? _cameraController;
-  final FaceDetector _faceDetector = FaceDetector(
-    options: FaceDetectorOptions(),
+
+  // ── ML Kit face detector ────────────────────────────────────────────────────
+  // enableClassification → provides eye open probabilities (needed for blink).
+  late final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(
+      enableClassification: true, // eye open probabilities for blink detection
+      performanceMode: FaceDetectorMode.accurate,
+    ),
   );
 
+  // ── Active liveness ─────────────────────────────────────────────────────────
+  final ActiveLivenessEngine _activeLivenessEngine = ActiveLivenessEngine();
+  late final List<ActiveChallenge> _challengeQueue;
+  int _currentChallengeIndex = 0;
+
+  // ── Phase / UI state ────────────────────────────────────────────────────────
+  _AuthPhase _phase = _AuthPhase.lighting;
   bool _isProcessing = false;
   bool _isAuthenticating = false;
   String _instructionText = 'Checking lighting…';
   Color _borderColor = Colors.grey;
-
-  // ── Lighting gate ─────────────────────────────────────────────────────────
-  // Starts as _LightingStatus.unknown.
-  // Face detection only runs once this becomes .ok.
-  // Any transition away from .ok immediately re-blocks face detection.
   _LightingStatus _lightingStatus = _LightingStatus.unknown;
+
+  // Progress indicator for scanning phase
+  bool _showProgress = false;
 
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnimation;
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -63,6 +108,12 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     _pulseAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    // Build challenge queue in stable enum order from the provided set.
+    _challengeQueue = ActiveChallenge.values
+        .where((c) => widget.activeChallenges.contains(c))
+        .toList();
+
     _initCamera();
   }
 
@@ -72,7 +123,6 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
       (c) => c.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
     );
-
     _cameraController = CameraController(
       front,
       ResolutionPreset.medium,
@@ -81,25 +131,22 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
           ? ImageFormatGroup.nv21
           : ImageFormatGroup.bgra8888,
     );
-
     await _cameraController!.initialize();
     if (!mounted) return;
-
     _cameraController!.startImageStream(_handleCameraImage);
     setState(() {});
   }
 
-  // ── Lighting check ─────────────────────────────────────────────────────────
-  //
-  // Uses a histogram-based method instead of mean-only:
-  //   • Counts "dark" pixels (Y < 60) and "saturated" pixels (Y > 245).
-  //   • If >40% dark  → tooDark
-  //   • If >15% blown → tooBright
-  //   • Otherwise     → ok
-  //
-  // Correctly reads Y values accounting for each row's bytesPerRow padding
-  // (some SoCs pad rows to 32/64 byte boundaries — naive sequential reading
-  // mixes padding bytes into the average, corrupting the result).
+  @override
+  void dispose() {
+    _cameraController?.dispose();
+    _faceDetector.close();
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  // ── Lighting check ───────────────────────────────────────────────────────────
+
   _LightingStatus _computeLighting(CameraImage image) {
     final plane = image.planes[0];
     final bytes = plane.bytes;
@@ -110,13 +157,9 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     int darkCount = 0;
     int brightCount = 0;
     int total = 0;
-
-    // Sample every 8th pixel in both dimensions for ~(w/8)*(h/8) samples.
     const int step = 8;
 
     if (Platform.isAndroid) {
-      // NV21 / YUV_420_888: plane 0 is pure Y (one byte per pixel),
-      // but each row is padded to rowStride bytes.
       for (int row = 0; row < height; row += step) {
         final int rowBase = row * rowStride;
         for (int col = 0; col < width; col += step) {
@@ -129,18 +172,15 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
         }
       }
     } else {
-      // BGRA8888 (iOS): plane 0 is interleaved [B, G, R, A], 4 bytes per pixel.
       final int pixelStride = plane.bytesPerPixel ?? 4;
       for (int row = 0; row < height; row += step) {
         final int rowBase = row * rowStride;
         for (int col = 0; col < width; col += step) {
           final int idx = rowBase + col * pixelStride;
           if (idx + 2 >= bytes.length) break;
-          final int b = bytes[idx] & 0xFF;
-          final int g = bytes[idx + 1] & 0xFF;
-          final int r = bytes[idx + 2] & 0xFF;
-          // BT.601 luma
-          final double y = 0.299 * r + 0.587 * g + 0.114 * b;
+          final double y = 0.299 * (bytes[idx + 2] & 0xFF) +
+              0.587 * (bytes[idx + 1] & 0xFF) +
+              0.114 * (bytes[idx] & 0xFF);
           if (y < _kDarkPixelThreshold) darkCount++;
           if (y > _kBrightPixelThreshold) brightCount++;
           total++;
@@ -149,14 +189,12 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     }
 
     if (total == 0) return _LightingStatus.ok;
-
     final double darkFrac = darkCount / total;
     final double brightFrac = brightCount / total;
 
     debugPrint(
-      '[Lighting] dark=${(darkFrac * 100).toStringAsFixed(1)}% '
-      'bright=${(brightFrac * 100).toStringAsFixed(1)}% '
-      'samples=$total  ${image.width}x${image.height} stride=$rowStride',
+      '[Lighting] dark=${(darkFrac * 100).toStringAsFixed(1)}%  '
+      'bright=${(brightFrac * 100).toStringAsFixed(1)}%',
     );
 
     if (darkFrac > _kDarkFraction) return _LightingStatus.tooDark;
@@ -164,97 +202,190 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     return _LightingStatus.ok;
   }
 
-  // ── Camera frame handler ───────────────────────────────────────────────────
+  // ── Challenge instruction helper ─────────────────────────────────────────────
+
+  String _challengeInstruction(ActiveChallenge c) {
+    switch (c) {
+      case ActiveChallenge.blink:
+        return 'Blink your eyes';
+      case ActiveChallenge.headNod:
+        return 'Nod your head up and down';
+      case ActiveChallenge.headShake:
+        return 'Shake your head left and right';
+    }
+  }
+
+  // ── Main camera frame handler ─────────────────────────────────────────────
 
   void _handleCameraImage(CameraImage image) async {
     if (_isProcessing || _isAuthenticating) return;
     _isProcessing = true;
 
     try {
-      // ── Step 1: Lighting check — ALWAYS first, ALWAYS blocks on failure ──
-      final _LightingStatus lighting = _computeLighting(image);
-
+      // ── 1. Lighting check (every frame, cheap) ───────────────────────────
+      final lighting = _computeLighting(image);
       if (lighting != _lightingStatus) {
         setState(() {
           _lightingStatus = lighting;
-          // Reset instruction text whenever lighting goes bad
           if (lighting != _LightingStatus.ok) {
+            // Bad lighting → reset to lighting phase
+            _phase = _AuthPhase.lighting;
+            _currentChallengeIndex = 0;
+            _activeLivenessEngine.resetState();
             _instructionText = 'Align your face within the frame';
             _borderColor = Colors.redAccent;
           }
         });
       }
 
-      // Hard gate: lighting must be confirmed OK on THIS frame before
-      // any image is passed to face detection or the auth engine.
-      if (lighting != _LightingStatus.ok) return;
+      // Gate: bad lighting stops all further processing this frame.
+      if (_lightingStatus != _LightingStatus.ok) return;
 
-      // ── Step 2: Face detection ────────────────────────────────────────────
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in image.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      final bytes = allBytes.done().buffer.asUint8List();
-
-      final Size imageSize = Size(
-        image.width.toDouble(),
-        image.height.toDouble(),
-      );
-      final camera = _cameraController!.description;
-      final imageRotation =
-          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-          InputImageRotation.rotation270deg;
-      final inputImageFormat =
-          InputImageFormatValue.fromRawValue(image.format.raw) ??
-          InputImageFormat.nv21;
-
-      final inputData = InputImageMetadata(
-        size: imageSize,
-        rotation: imageRotation,
-        format: inputImageFormat,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      );
-
-      final inputImage = InputImage.fromBytes(
-        bytes: bytes,
-        metadata: inputData,
-      );
-      final faces = await _faceDetector.processImage(inputImage);
-
-      if (faces.isEmpty) {
+      // ── 2. Advance from lighting → faceAlign once lighting is confirmed ──
+      if (_phase == _AuthPhase.lighting) {
         setState(() {
-          _instructionText = 'Center your face in the frame';
+          _phase = _AuthPhase.faceAlign;
+          _instructionText = 'Align your face within the frame';
           _borderColor = Colors.redAccent;
         });
-      } else {
-        final face = faces.first;
-        final bounds = face.boundingBox;
+      }
 
-        if (bounds.width < imageSize.width * 0.3) {
+      // ── 3. Face detection ────────────────────────────────────────────────
+      final faces = await _runFaceDetection(image);
+
+      if (faces.isEmpty) {
+        if (_phase == _AuthPhase.faceAlign || _phase == _AuthPhase.challenge) {
           setState(() {
-            _instructionText = 'Move closer';
-            _borderColor = Colors.orangeAccent;
+            _instructionText = 'Center your face in the frame';
+            _borderColor = Colors.redAccent;
+            // Reset challenge if user moved away
+            if (_phase == _AuthPhase.challenge) {
+              _currentChallengeIndex = 0;
+              _activeLivenessEngine.resetState();
+              _phase = _AuthPhase.faceAlign;
+            }
           });
-          return;
         }
+        return;
+      }
 
+      final face = faces.first;
+      final double imageWidth = image.width.toDouble();
+
+      // Face size check
+      if (face.boundingBox.width < imageWidth * 0.28) {
         setState(() {
-          _instructionText = 'Scanning… Please hold still.';
-          _borderColor = Colors.blueAccent;
-          _isAuthenticating = true;
+          _instructionText = 'Move closer';
+          _borderColor = Colors.orangeAccent;
         });
+        return;
+      }
 
-        await _cameraController!.stopImageStream();
-        await _authenticateCapturedFace();
+      // ── 4. Active liveness phase ─────────────────────────────────────────
+      if (_phase == _AuthPhase.faceAlign &&
+          widget.requireActiveLiveness &&
+          _challengeQueue.isNotEmpty) {
+        // Face is good — start active challenges
+        setState(() {
+          _phase = _AuthPhase.challenge;
+          _currentChallengeIndex = 0;
+          _activeLivenessEngine.resetState();
+          _instructionText =
+              _challengeInstruction(_challengeQueue[0]);
+          _borderColor = Colors.blueAccent;
+        });
+        return;
+      }
+
+      if (_phase == _AuthPhase.challenge) {
+        final currentChallenge = _challengeQueue[_currentChallengeIndex];
+        final completed = _activeLivenessEngine.verifyChallenge(
+          face: face,
+          challenge: currentChallenge,
+        );
+
+        if (completed) {
+          _currentChallengeIndex++;
+          if (_currentChallengeIndex >= _challengeQueue.length) {
+            // All challenges done → proceed to capture
+            _startCapture();
+          } else {
+            _activeLivenessEngine.resetState();
+            setState(() {
+              _instructionText = _challengeInstruction(
+                _challengeQueue[_currentChallengeIndex],
+              );
+              _borderColor = Colors.blueAccent;
+            });
+          }
+        } else {
+          // Update instruction text to stay current
+          final expected = _challengeInstruction(currentChallenge);
+          if (_instructionText != expected) {
+            setState(() {
+              _instructionText = expected;
+              _borderColor = Colors.blueAccent;
+            });
+          }
+        }
+        return;
+      }
+
+      // ── 5. faceAlign → capture (no active liveness, or all done) ────────
+      if (_phase == _AuthPhase.faceAlign) {
+        _startCapture();
       }
     } catch (e) {
-      debugPrint('Error processing frame: $e');
+      debugPrint('[AuthScreen] Frame error: $e');
     } finally {
       if (mounted) _isProcessing = false;
     }
   }
 
-  Future<void> _authenticateCapturedFace() async {
+  void _startCapture() {
+    if (_isAuthenticating) return;
+    setState(() {
+      _isAuthenticating = true;
+      _phase = _AuthPhase.scanning;
+      _instructionText = 'Scanning… Please hold still.';
+      _borderColor = Colors.blueAccent;
+      _showProgress = true;
+    });
+    _cameraController!.stopImageStream().then((_) => _captureAndAuthenticate());
+  }
+
+  // ── Face detection helper ────────────────────────────────────────────────────
+
+  Future<List<Face>> _runFaceDetection(CameraImage image) async {
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    final bytes = allBytes.done().buffer.asUint8List();
+    final imageSize =
+        Size(image.width.toDouble(), image.height.toDouble());
+    final camera = _cameraController!.description;
+    final imageRotation =
+        InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+            InputImageRotation.rotation270deg;
+    final inputImageFormat =
+        InputImageFormatValue.fromRawValue(image.format.raw) ??
+            InputImageFormat.nv21;
+    final inputImage = InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: imageSize,
+        rotation: imageRotation,
+        format: inputImageFormat,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
+    return _faceDetector.processImage(inputImage);
+  }
+
+  // ── Auth pipeline ────────────────────────────────────────────────────────────
+
+  Future<void> _captureAndAuthenticate() async {
     try {
       final xFile = await _cameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
@@ -263,31 +394,44 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
       final result = await widget.sdk.checkFaceAuth(
         targetImageBase64: base64String,
         useReference: true,
-        passiveLiveness: true,
+        passiveLiveness: widget.requirePassiveLiveness,
+        proceedIfLivenessFail: widget.proceedIfLivenessFails,
+      );
+
+      // Attach active liveness result
+      final finalResult = FaceAuthResult(
+        success: result.success,
+        strong: result.strong,
+        passiveLivenessResult: result.passiveLivenessResult,
+        // active liveness passed if we made it past the challenge phase
+        activeLivenessResult: widget.requireActiveLiveness ? true : null,
       );
 
       if (mounted) {
-        if (result.success) {
+        if (finalResult.success) {
           setState(() {
             _instructionText = 'Authentication Successful!';
             _borderColor = Colors.green;
+            _showProgress = false;
           });
-          await Future.delayed(const Duration(milliseconds: 700));
+          await Future.delayed(const Duration(milliseconds: 600));
         } else {
           setState(() {
             _instructionText = 'Authentication Failed.';
             _borderColor = Colors.red;
+            _showProgress = false;
           });
           await Future.delayed(const Duration(milliseconds: 1000));
         }
         if (!mounted) return;
-        Navigator.pop(context, result);
+        Navigator.pop(context, finalResult);
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _instructionText = 'System Error. Please try again.';
           _borderColor = Colors.red;
+          _showProgress = false;
         });
         await Future.delayed(const Duration(seconds: 2));
         if (!mounted) return;
@@ -296,51 +440,43 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     }
   }
 
-  @override
-  void dispose() {
-    _cameraController?.dispose();
-    _faceDetector.close();
-    _pulseController.dispose();
-    super.dispose();
-  }
+  // ── Build ─────────────────────────────────────────────────────────────────────
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
-  String get _lightingInstructionText {
-    switch (_lightingStatus) {
-      case _LightingStatus.tooDark:
-        return 'Move to a well-lit area or\nturn on a light facing you';
-      case _LightingStatus.tooBright:
-        return 'Avoid bright lights or\ndirect sunlight behind you';
-      case _LightingStatus.unknown:
-        return 'Checking lighting…';
-      case _LightingStatus.ok:
-        return _instructionText;
-    }
-  }
+  bool get _lightingBad =>
+      _lightingStatus == _LightingStatus.tooDark ||
+      _lightingStatus == _LightingStatus.tooBright;
 
   Color get _effectiveBorderColor {
-    if (_lightingStatus == _LightingStatus.tooDark) return const Color(0xFF6C63FF);
-    if (_lightingStatus == _LightingStatus.tooBright) return const Color(0xFFFFC107);
+    if (_lightingStatus == _LightingStatus.tooDark) {
+      return const Color(0xFF6C63FF);
+    }
+    if (_lightingStatus == _LightingStatus.tooBright) {
+      return const Color(0xFFFFC107);
+    }
     return _borderColor;
+  }
+
+
+  String get _displayInstruction {
+    if (_lightingBad) {
+      return _lightingStatus == _LightingStatus.tooDark
+          ? 'Move to a well-lit area or\nturn on a light facing you'
+          : 'Avoid bright lights or\ndirect sunlight behind you';
+    }
+    return _instructionText;
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool lightingBad = _lightingStatus == _LightingStatus.tooDark ||
-        _lightingStatus == _LightingStatus.tooBright;
-
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Camera preview
           if (_cameraController != null &&
               _cameraController!.value.isInitialized)
             CameraPreview(_cameraController!),
 
-          // Face oval overlay
           CustomPaint(
             painter: FaceOverlayPainter(borderColor: _effectiveBorderColor),
             child: Container(),
@@ -365,10 +501,25 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
             ),
           ),
 
-          // ── Lighting warning banner ──────────────────────────────────────
-          if (lightingBad)
+          // Active liveness progress indicator (challenge chips)
+          if (widget.requireActiveLiveness &&
+              _challengeQueue.isNotEmpty &&
+              (_phase == _AuthPhase.challenge ||
+                  _phase == _AuthPhase.faceAlign))
             Positioned(
-              top: 110,
+              top: 100,
+              left: 20,
+              right: 20,
+              child: _ChallengeProgressRow(
+                challenges: _challengeQueue,
+                completedCount: _currentChallengeIndex,
+              ),
+            ),
+
+          // Lighting warning banner
+          if (_lightingBad)
+            Positioned(
+              top: widget.requireActiveLiveness ? 160 : 110,
               left: 20,
               right: 20,
               child: _LightingWarningBanner(
@@ -377,13 +528,14 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
               ),
             ),
 
-          // ── Instruction card ─────────────────────────────────────────────
+          // Instruction card
           Positioned(
             bottom: 100,
             left: 24,
             right: 24,
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+              padding:
+                  const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.95),
                 borderRadius: BorderRadius.circular(20),
@@ -398,7 +550,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (_isAuthenticating)
+                  if (_showProgress)
                     const Padding(
                       padding: EdgeInsets.only(right: 12),
                       child: SizedBox(
@@ -412,7 +564,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
                     ),
                   Expanded(
                     child: Text(
-                      _lightingInstructionText,
+                      _displayInstruction,
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.black87,
@@ -457,7 +609,80 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
   }
 }
 
-// ── Lighting warning widget ────────────────────────────────────────────────────
+// ── Active challenge progress row ─────────────────────────────────────────────
+
+class _ChallengeProgressRow extends StatelessWidget {
+  final List<ActiveChallenge> challenges;
+  final int completedCount;
+
+  const _ChallengeProgressRow({
+    required this.challenges,
+    required this.completedCount,
+  });
+
+  String _label(ActiveChallenge c) {
+    switch (c) {
+      case ActiveChallenge.blink:
+        return 'Blink';
+      case ActiveChallenge.headNod:
+        return 'Nod';
+      case ActiveChallenge.headShake:
+        return 'Shake';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(challenges.length, (i) {
+        final done = i < completedCount;
+        final active = i == completedCount;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          margin: const EdgeInsets.symmetric(horizontal: 6),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: done
+                ? Colors.green.withValues(alpha: 0.9)
+                : active
+                    ? Colors.white.withValues(alpha: 0.9)
+                    : Colors.white.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: active ? Colors.blueAccent : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (done)
+                const Icon(Icons.check, size: 14, color: Colors.white),
+              if (done) const SizedBox(width: 4),
+              Text(
+                _label(challenges[i]),
+                style: TextStyle(
+                  color: done
+                      ? Colors.white
+                      : active
+                          ? Colors.black87
+                          : Colors.white70,
+                  fontWeight:
+                      active ? FontWeight.w700 : FontWeight.w500,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
+    );
+  }
+}
+
+// ── Lighting warning banner ───────────────────────────────────────────────────
 
 class _LightingWarningBanner extends StatelessWidget {
   final _LightingStatus status;
@@ -471,13 +696,11 @@ class _LightingWarningBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool isDark = status == _LightingStatus.tooDark;
-
     final Color bg = isDark
         ? const Color(0xFF1A1A2E).withValues(alpha: 0.92)
         : const Color(0xFFFFF3CD).withValues(alpha: 0.95);
-    final Color border = isDark
-        ? const Color(0xFF6C63FF)
-        : const Color(0xFFFFC107);
+    final Color border =
+        isDark ? const Color(0xFF6C63FF) : const Color(0xFFFFC107);
     final Color textColor =
         isDark ? Colors.white : const Color(0xFF5D4037);
     final IconData icon =
@@ -504,7 +727,6 @@ class _LightingWarningBanner extends StatelessWidget {
           ],
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Icon(icon, color: border, size: 30),
             const SizedBox(width: 14),
@@ -512,23 +734,17 @@ class _LightingWarningBanner extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  Text(title,
+                      style: TextStyle(
+                          color: textColor,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 3),
-                  Text(
-                    hint,
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.85),
-                      fontSize: 13,
-                      height: 1.4,
-                    ),
-                  ),
+                  Text(hint,
+                      style: TextStyle(
+                          color: textColor.withValues(alpha: 0.85),
+                          fontSize: 13,
+                          height: 1.4)),
                 ],
               ),
             ),

@@ -257,13 +257,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _launchAuthenticate() async {
-    // The AuthenticateFaceScreen currently implicitly takes required liveness rules
-    // based on its default design. We can augment the AuthenticateFaceScreen in a real deployment
-    // to ingest the ActiveLiveness rules directly. For now, it performs checking.
+    // Build the set of active liveness challenges from the toggle state.
+    final Set<ActiveChallenge> challenges = {
+      if (_activeBlink) ActiveChallenge.blink,
+      if (_activeNod) ActiveChallenge.headNod,
+      if (_activeShake) ActiveChallenge.headShake,
+    };
+
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AuthenticateFaceScreen(sdk: widget.sdk),
+        builder: (_) => AuthenticateFaceScreen(
+          sdk: widget.sdk,
+          requirePassiveLiveness: _requirePassiveLiveness,
+          requireActiveLiveness: _requireActiveLiveness,
+          activeChallenges: challenges.isEmpty ? {ActiveChallenge.blink} : challenges,
+          proceedIfLivenessFails: _proceedIfLivenessFail,
+        ),
       ),
     );
 
