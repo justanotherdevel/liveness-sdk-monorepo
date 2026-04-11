@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,7 +23,8 @@ enum _LightingStatus { unknown, ok, tooDark, tooBright }
 
 /// The auth screen moves through these phases in order.
 enum _AuthPhase {
-  lighting,   // camera on, waiting for valid lighting
+  countdown,  // initial grace period — camera shows, nothing starts yet
+  lighting,   // waiting for valid lighting
   faceAlign,  // lighting OK, waiting for face to be centred + close enough
   challenge,  // running active liveness challenges sequentially
   scanning,   // capturing frame + running auth pipeline
@@ -50,6 +52,11 @@ class AuthenticateFaceScreen extends StatefulWidget {
   /// Defaults to false.
   final bool proceedIfLivenessFails;
 
+  /// Cosine-similarity threshold for face matching (0–1).
+  /// A lower value is more permissive; higher is stricter.
+  /// Defaults to 0.80. Applies to both on-device and server-fallback matching.
+  final double threshold;
+
   const AuthenticateFaceScreen({
     super.key,
     required this.sdk,
@@ -57,6 +64,7 @@ class AuthenticateFaceScreen extends StatefulWidget {
     this.requireActiveLiveness = false,
     this.activeChallenges = const {ActiveChallenge.blink},
     this.proceedIfLivenessFails = false,
+    this.threshold = 0.80,
   });
 
   @override
@@ -83,12 +91,16 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
   int _currentChallengeIndex = 0;
 
   // ── Phase / UI state ────────────────────────────────────────────────────────
-  _AuthPhase _phase = _AuthPhase.lighting;
+  _AuthPhase _phase = _AuthPhase.countdown;
   bool _isProcessing = false;
   bool _isAuthenticating = false;
-  String _instructionText = 'Checking lighting…';
+  String _instructionText = 'Get ready…';
   Color _borderColor = Colors.grey;
   _LightingStatus _lightingStatus = _LightingStatus.unknown;
+
+  // Countdown
+  static const int _kCountdownSeconds = 5;
+  int _countdown = _kCountdownSeconds;
 
   // Progress indicator for scanning phase
   bool _showProgress = false;
@@ -101,6 +113,12 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
   @override
   void initState() {
     super.initState();
+    // Lock to portrait for the duration of this screen.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 700),
@@ -135,10 +153,34 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     if (!mounted) return;
     _cameraController!.startImageStream(_handleCameraImage);
     setState(() {});
+    _startCountdown();
+  }
+
+  void _startCountdown() {
+    // Tick every second and decrement the counter.
+    // During the countdown the camera stream is active for lighting checks
+    // but face detection / auth are blocked.
+    Future.delayed(const Duration(seconds: 1), _countdownTick);
+  }
+
+  void _countdownTick() {
+    if (!mounted) return;
+    setState(() {
+      _countdown--;
+      if (_countdown <= 0) {
+        _phase = _AuthPhase.lighting; // hand off to normal flow
+        _instructionText = 'Checking lighting…';
+      }
+    });
+    if (_countdown > 0) {
+      Future.delayed(const Duration(seconds: 1), _countdownTick);
+    }
   }
 
   @override
   void dispose() {
+    // Restore all orientations so the rest of the app is unaffected.
+    SystemChrome.setPreferredOrientations([]);
     _cameraController?.dispose();
     _faceDetector.close();
     _pulseController.dispose();
@@ -188,7 +230,9 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
       }
     }
 
-    if (total == 0) return _LightingStatus.ok;
+    // If we couldn't sample any pixels (e.g. stride mismatch), stay unknown
+    // rather than wrongly reporting OK and allowing a bad frame through.
+    if (total == 0) return _LightingStatus.unknown;
     final double darkFrac = darkCount / total;
     final double brightFrac = brightCount / total;
 
@@ -227,8 +271,10 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
       if (lighting != _lightingStatus) {
         setState(() {
           _lightingStatus = lighting;
-          if (lighting != _LightingStatus.ok) {
-            // Bad lighting → reset to lighting phase
+          // During countdown we still want to show lighting warnings, but we
+          // must not change _phase away from countdown — the countdown ticks
+          // independently and will transition to lighting on its own.
+          if (lighting != _LightingStatus.ok && _phase != _AuthPhase.countdown) {
             _phase = _AuthPhase.lighting;
             _currentChallengeIndex = 0;
             _activeLivenessEngine.resetState();
@@ -238,7 +284,11 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
         });
       }
 
-      // Gate: bad lighting stops all further processing this frame.
+      // Gate 1: countdown still running — show lighting warnings but don't
+      // start face detection or auth yet.
+      if (_phase == _AuthPhase.countdown) return;
+
+      // Gate 2: bad lighting stops all further processing this frame.
       if (_lightingStatus != _LightingStatus.ok) return;
 
       // ── 2. Advance from lighting → faceAlign once lighting is confirmed ──
@@ -344,6 +394,9 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
 
   void _startCapture() {
     if (_isAuthenticating) return;
+    // Hard gate: if the stream-based lighting check says the current frame is
+    // bad, do not capture. The next frame will re-evaluate.
+    if (_lightingStatus != _LightingStatus.ok) return;
     setState(() {
       _isAuthenticating = true;
       _phase = _AuthPhase.scanning;
@@ -389,6 +442,26 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     try {
       final xFile = await _cameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
+
+      // Verify lighting on the ACTUAL captured JPEG — not the last stream frame.
+      // The camera's auto-exposure can shift between the stream check and
+      // takePicture(), so we re-sample the image we're about to send to liveness.
+      final capturedLightingOk = await _isJpegWellLit(bytes);
+      if (!capturedLightingOk) {
+        debugPrint('[AuthScreen] Captured frame has bad lighting — retrying.');
+        if (mounted) {
+          setState(() {
+            _isAuthenticating = false;
+            _showProgress = false;
+            _phase = _AuthPhase.lighting;
+            _instructionText = 'Adjust lighting and try again';
+            _borderColor = Colors.redAccent;
+          });
+          await _cameraController!.startImageStream(_handleCameraImage);
+        }
+        return;
+      }
+
       final base64String = base64Encode(bytes);
 
       final result = await widget.sdk.checkFaceAuth(
@@ -396,6 +469,7 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
         useReference: true,
         passiveLiveness: widget.requirePassiveLiveness,
         proceedIfLivenessFail: widget.proceedIfLivenessFails,
+        threshold: widget.threshold,
       );
 
       // Attach active liveness result
@@ -440,7 +514,56 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
     }
   }
 
+  // ── JPEG lighting check ──────────────────────────────────────────────────────
+
+  /// Decodes [jpegBytes] and samples luminance to decide if the captured image
+  /// has acceptable lighting for liveness analysis.
+  /// Returns true if lighting is OK, false if too dark or too bright.
+  Future<bool> _isJpegWellLit(Uint8List jpegBytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(jpegBytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      final int w = img.width;
+      final int h = img.height;
+      final byteData = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+      img.dispose();
+      if (byteData == null || w == 0 || h == 0) return true;
+
+      final pixels = byteData.buffer.asUint8List();
+      int darkCount = 0, brightCount = 0, total = 0;
+      const int step = 10; // sample ~1% of pixels — fast enough
+      for (int row = 0; row < h; row += step) {
+        for (int col = 0; col < w; col += step) {
+          final int idx = (row * w + col) * 4; // RGBA
+          if (idx + 2 >= pixels.length) break;
+          final double lum =
+              0.299 * pixels[idx] +      // R
+              0.587 * pixels[idx + 1] +  // G
+              0.114 * pixels[idx + 2];   // B
+          if (lum < _kDarkPixelThreshold) darkCount++;
+          if (lum > _kBrightPixelThreshold) brightCount++;
+          total++;
+        }
+      }
+      if (total == 0) return true;
+      final double darkFrac = darkCount / total;
+      final double brightFrac = brightCount / total;
+      debugPrint(
+        '[AuthScreen] Captured-JPEG lighting — '
+        'dark=${(darkFrac * 100).toStringAsFixed(1)}%  '
+        'bright=${(brightFrac * 100).toStringAsFixed(1)}%',
+      );
+      return darkFrac <= _kDarkFraction && brightFrac <= _kBrightFraction;
+    } catch (e) {
+      debugPrint('[AuthScreen] _isJpegWellLit error: $e');
+      return true; // fail open — don't block auth on a decode error
+    }
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────────
+
+  bool get _inCountdown => _phase == _AuthPhase.countdown;
 
   bool get _lightingBad =>
       _lightingStatus == _LightingStatus.tooDark ||
@@ -458,6 +581,11 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
 
 
   String get _displayInstruction {
+    if (_inCountdown) {
+      return _countdown > 0
+          ? 'Starting in $_countdown…'
+          : 'Get ready…';
+    }
     if (_lightingBad) {
       return _lightingStatus == _LightingStatus.tooDark
           ? 'Move to a well-lit area or\nturn on a light facing you'
@@ -500,6 +628,30 @@ class _AuthenticateFaceScreenState extends State<AuthenticateFaceScreen>
               ),
             ),
           ),
+
+          // Countdown ring — only shown during countdown phase
+          if (_inCountdown)
+            Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  '$_countdown',
+                  key: ValueKey(_countdown),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 96,
+                    fontWeight: FontWeight.w900,
+                    shadows: [
+                      Shadow(
+                        blurRadius: 30,
+                        color: Colors.black87,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // Active liveness progress indicator (challenge chips)
           if (widget.requireActiveLiveness &&

@@ -187,6 +187,7 @@ async def compare_faces(
     cropped: bool = Form(True),
     reference_image: UploadFile = File(...),
     target_image: UploadFile = File(...),
+    threshold: float = Form(0.7),
     db: Session = Depends(get_db),
 ):
     verify_api_key(api_key, db)
@@ -212,7 +213,6 @@ async def compare_faces(
         }
 
     similarity = compute_similarity(ref_feat, tgt_feat)
-    threshold = 0.7
     is_match = bool(similarity >= threshold)
 
     return {

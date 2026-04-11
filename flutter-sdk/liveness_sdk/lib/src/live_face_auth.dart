@@ -404,6 +404,7 @@ class LiveFaceAuth {
       final fallbackResult = await _serverFallbackCompare(
         refCropped,
         targetCropped,
+        threshold: threshold,
       );
       debugPrint(
         "[LiveFaceAuth] Server fallback result: success=${fallbackResult.success}",
@@ -440,8 +441,9 @@ class LiveFaceAuth {
 
   Future<FaceAuthResult> _serverFallbackCompare(
     Uint8List refCropped,
-    Uint8List targetCropped,
-  ) async {
+    Uint8List targetCropped, {
+    double threshold = 0.80,
+  }) async {
     try {
       final request = http.MultipartRequest(
         "POST",
@@ -449,6 +451,7 @@ class LiveFaceAuth {
       );
       request.fields['api_key'] = _apiKey ?? "";
       request.fields['cropped'] = "true";
+      request.fields['threshold'] = threshold.toString();
       request.files.add(
         http.MultipartFile.fromBytes(
           'reference_image',
